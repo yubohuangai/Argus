@@ -24,8 +24,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Point;
+import android.graphics.PorterDuff;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -43,6 +45,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.util.Log;
 import android.util.Size;
 import android.view.Gravity;
@@ -396,30 +399,63 @@ public class MainActivity extends Activity {
         getPeriodButton.setOnClickListener(
                 view -> {
                     Log.d(TAG, "Calculating frames period.");
+                    // PATCH:
+                    // when pressed, set the button color and text
+                    getPeriodButton.setText("Calculating period...");
+                    getPeriodButton.setEnabled(false);
+                    getPeriodButton.setTextColor(Color.BLACK);
+//
+//                    FutureTask<Integer> periodTask = new FutureTask<Integer>(
+//                            () -> {
+//                                try {
+//                                    long periodNs = periodCalculator.getPeriodNs();
+//                                    Log.d(TAG, "Calculated period: " + periodNs);
+//                                    if (latestToast != null) {
+//                                        latestToast.cancel();
+//                                    }
+//                                    latestToast =
+//                                            Toast.makeText(
+//                                                    this,
+//                                                    "Calculated period: " + periodNs,
+//                                                    Toast.LENGTH_LONG);
+//                                    latestToast.show();
+//                                    phaseAlignController.setPeriodNs(periodNs);
+//
+//                                } catch (InterruptedException e) {
+//                                    Log.d(TAG, "Failed calculating period");
+//                                    e.printStackTrace();
+//                                }
+//
+//                                return 0;
+//                            }
+//                    );
+//                    periodTask.run();
 
-                    FutureTask<Integer> periodTask = new FutureTask<Integer>(
-                            () -> {
-                                try {
-                                    long periodNs = periodCalculator.getPeriodNs();
-                                    Log.d(TAG, "Calculated period: " + periodNs);
-                                    if (latestToast != null) {
-                                        latestToast.cancel();
-                                    }
-                                    latestToast =
-                                            Toast.makeText(
-                                                    this,
-                                                    "Calculated period: " + periodNs,
-                                                    Toast.LENGTH_LONG);
-                                    latestToast.show();
-                                    phaseAlignController.setPeriodNs(periodNs);
-                                } catch (InterruptedException e) {
-                                    Log.d(TAG, "Failed calculating period");
-                                    e.printStackTrace();
-                                }
-                                return 0;
-                            }
-                    );
-                    periodTask.run();
+                    // PATCH:
+                    // run period calculation in background thread
+                    new Thread(() -> {
+                        try {
+                            // This part now runs in the background and does not block the UI.
+                            long periodNs = periodCalculator.getPeriodNs();
+                            Log.d(TAG, "Calculated period: " + periodNs);
+
+                            // --- Step 3: Post the final UI update back to the main thread ---
+                            runOnUiThread(() -> {
+                                // This code will be executed on the UI thread.
+
+                                phaseAlignController.setPeriodNs(periodNs);
+
+                                // Revert the button's appearance to the "finished" state
+                                getPeriodButton.setEnabled(true);
+                                getPeriodButton.setTextColor(Color.parseColor("#006400"));
+                                getPeriodButton.setText("Period: " + periodNs + " ns");
+                            });
+
+                        } catch (InterruptedException e) {
+                            Log.d(TAG, "Failed calculating period");
+                            e.printStackTrace();
+                        }
+                    }).start(); // Don't forget to start the thread!
                 }
         );
 
@@ -440,12 +476,26 @@ public class MainActivity extends Activity {
                                             SoftwareSyncController.METHOD_STOP_RECORDING,
                                             "0");
 
+                            // PATCH:
+                            // Set capture button color when recording
+                            captureStillButton.setText("RECORD VIDEO"); // Revert text
+                            captureStillButton.getBackground().setColorFilter(null); // Remove red color
+                            captureStillButton.setTextColor(Color.BLACK);
+
                         } else {
                             startVideo(false);
                             ((SoftwareSyncLeader) softwareSyncController.softwareSync)
                                     .broadcastRpc(
                                             SoftwareSyncController.METHOD_START_RECORDING,
                                             "0");
+                            // PATCH:
+                            // Revert capture button color when stopped recording
+                            captureStillButton.setText("Recording..."); // Set new text
+                            // Make the button's background red
+                            captureStillButton.getBackground().setColorFilter(
+                                    Color.RED, PorterDuff.Mode.MULTIPLY);
+                            captureStillButton.setTextColor(Color.WHITE);
+                            // Note: The isVideoRecording flag is set to
                         }
 
 /*            if (cameraController.getOutputSurfaces().isEmpty()) {
@@ -900,6 +950,16 @@ public class MainActivity extends Activity {
         } catch (CameraAccessException e) {
             Log.e(TAG, "Unable to reconfigure capture request", e);
         }
+
+        // PATCH:
+        // Auto calculate period after preview starts with 2 sec delay
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (getPeriodButton != null) {
+                Log.d(TAG, "Preview started, automatically calculating period.");
+                getPeriodButton.performClick();
+            }
+        }, 2000);
+
     }
 
     private void startPreview(boolean wantAutoExp) {
