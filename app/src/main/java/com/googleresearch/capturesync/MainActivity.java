@@ -20,6 +20,8 @@ package com.googleresearch.capturesync;
 import android.Manifest.permission;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -41,6 +43,7 @@ import android.media.CamcorderProfile;
 import android.media.MediaCodec;
 import android.media.MediaRecorder;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -60,6 +63,11 @@ import android.widget.SeekBar;
 import android.widget.SeekBar.OnSeekBarChangeListener;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import android.os.Process;
+import android.os.Build;
+
+import android.os.SystemClock;
 
 import com.googleresearch.capturesync.softwaresync.CSVLogger;
 import com.googleresearch.capturesync.softwaresync.SoftwareSyncLeader;
@@ -177,6 +185,11 @@ public class MainActivity extends Activity {
     private TextView sensorSensitivityTextView;
     private TextView softwaresyncStatusTextView;
     private TextView phaseTextView;
+
+    // PATCH: collective reset
+    private Button resetAllButton;
+    // Add a Handler as a class member for managing UI delays
+    private Handler uiHandler = new Handler(Looper.getMainLooper());
 
     // Local variables tracking current manual exposure and sensitivity values.
     private long currentSensorExposureTimeNs = seekBarValueToExposureNs(10);
@@ -467,6 +480,44 @@ public class MainActivity extends Activity {
             exposureSeekBar.setVisibility(View.VISIBLE);
             sensitivitySeekBar.setVisibility(View.VISIBLE);
 
+            // PATCH: collective reset
+            // leader device
+            // Make Reset All button visible for leader and set its listener
+            resetAllButton.setVisibility(View.VISIBLE);
+            resetAllButton.setEnabled(false);
+            resetAllButton.setTextColor(Color.GRAY);
+            resetAllButton.setText("Waiting");
+
+            // Schedule a task to re-enable the button after 5 seconds.
+            uiHandler.postDelayed(() -> {
+                if (resetAllButton != null) {
+                    resetAllButton.setEnabled(true);
+                    resetAllButton.setText("RESET ALL");
+                    resetAllButton.setTextColor(Color.RED);
+                }
+            }, 5000);
+            resetAllButton.setOnClickListener(v -> {
+                Log.d(TAG, "Leader 'Reset All' button pressed. Broadcasting reset and restarting.");
+
+                // Add a cooldown to prevent rapid-fire clicks
+                resetAllButton.setEnabled(false);
+                resetAllButton.setText("Resetting...");
+
+                uiHandler.postDelayed(() -> {
+                    if (resetAllButton != null) {
+                        resetAllButton.setEnabled(true);
+                        resetAllButton.setText("Reset All");
+                    }
+                }, 7000); // 7 seconds cooldown
+
+                // 1. Broadcast reset to all clients
+                softwareSyncController.broadcastResetAll();
+                // 2. Restart leader app
+                restartApp(0);
+            });
+
+
+
             captureStillButton.setOnClickListener(
                     view -> {
                         if (isVideoRecording) {
@@ -597,6 +648,12 @@ public class MainActivity extends Activity {
             getPeriodButton.setVisibility(View.VISIBLE);
             exposureSeekBar.setVisibility(View.INVISIBLE);
             sensitivitySeekBar.setVisibility(View.INVISIBLE);
+
+            // PATCH: collective reset
+            // Client device don't have this btn
+            resetAllButton.setVisibility(View.GONE);
+            resetAllButton.setOnClickListener(null);
+
 
             captureStillButton.setOnClickListener(null);
             phaseAlignButton.setOnClickListener(null);
@@ -819,6 +876,9 @@ public class MainActivity extends Activity {
         captureStillButton = findViewById(R.id.capture_still_button);
         phaseAlignButton = findViewById(R.id.phase_align_button);
         getPeriodButton = findViewById(R.id.get_period_button);
+
+        // PATCH: collective reset
+        resetAllButton = findViewById(R.id.reset_all_button);
 
         exposureSeekBar = findViewById(R.id.exposure_seekbar);
         sensitivitySeekBar = findViewById(R.id.sensitivity_seekbar);
@@ -1182,6 +1242,48 @@ public class MainActivity extends Activity {
 
         // All permissions granted. Continue startup.
         onCreateWithPermission();
+    }
+
+    // PATCH: collective reset
+    /**
+     * Restarts the application using AlarmManager for robust scheduling.
+     *
+     * @param delayMs The delay in milliseconds before restarting.
+     */
+    public void restartApp(long delayMs) {
+        Log.d(TAG, "Scheduling app restart via AlarmManager in " + delayMs + "ms.");
+
+        // 1. Set up the AlarmManager to restart the app
+        Intent restartIntent = new Intent(this, RestartAppBroadcastReceiver.class);
+        restartIntent.setAction(RestartAppBroadcastReceiver.ACTION_RESTART_APP);
+
+        // FLAG_IMMUTABLE is required for API 31+
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                getApplicationContext(), 0, restartIntent, flags);
+
+        AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager != null) {
+            // Schedule the alarm to trigger after the delay.
+            // Use setExact for better precision on newer Android versions if possible,
+            // but set() is sufficient and doesn't require extra permissions.
+            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + delayMs,
+                    pendingIntent);
+
+            Log.d(TAG, "AlarmManager set. Finishing current activity.");
+        } else {
+            Log.e(TAG, "AlarmManager service not available!");
+            runOnUiThread(() -> Toast.makeText(this, "Failed to schedule restart!", Toast.LENGTH_LONG).show());
+            return; // Don't proceed if alarm manager is not available
+        }
+
+        // 2. Gracefully finish the current activity.
+        // The AlarmManager will wake up the BroadcastReceiver to restart the app later.
+        finish();
     }
 
     @Override

@@ -22,6 +22,7 @@ import android.net.wifi.WifiManager;
 import android.provider.Settings.Secure;
 import android.util.Log;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.googleresearch.capturesync.softwaresync.ClientInfo;
 import com.googleresearch.capturesync.softwaresync.NetworkHelpers;
@@ -62,6 +63,9 @@ public class SoftwareSyncController implements Closeable {
     public static final int METHOD_SET_2A = 200_002;
     public static final int METHOD_START_RECORDING = 200_003;
     public static final int METHOD_STOP_RECORDING = 200_004;
+
+    // PATCH: collective reset
+    public static final int METHOD_RESET_ALL = 200_005;
 
     private long upcomingTriggerTimeNs;
 
@@ -216,6 +220,19 @@ public class SoftwareSyncController implements Closeable {
                                                     String.format(
                                                             "Client %s\n-Synced to Leader %s",
                                                             softwareSync.getName(), softwareSync.getLeaderAddress()))));
+
+
+            // PATCH: collective reset
+            // register client rpc method to listen to the call
+            clientRpcs.put(
+                    SoftwareSyncController.METHOD_RESET_ALL, // ADD THIS RPC CALLBACK
+                    payload -> {
+                        Log.d(TAG, "Received METHOD_RESET_ALL from leader. Restarting in 2 seconds.");
+                        context.runOnUiThread(
+                                () -> statusView.setText("Resetting in 2 sec...")
+                        );
+                        context.restartApp(2000); // 2-second delay for clients
+                    });
             softwareSync = new SoftwareSyncClient(name, localAddress, leaderAddress, clientRpcs);
         }
 
@@ -285,5 +302,19 @@ public class SoftwareSyncController implements Closeable {
 
     public boolean isLeader() {
         return isLeader;
+    }
+
+
+    // PATCH: collective reset
+    /**
+     * Leader broadcasts a reset command to all connected clients.
+     */
+    public void broadcastResetAll() {
+        if (isLeader && softwareSync instanceof SoftwareSyncLeader) {
+            Log.d(TAG, "Leader broadcasting METHOD_RESET_ALL to clients.");
+            ((SoftwareSyncLeader) softwareSync).broadcastRpc(METHOD_RESET_ALL, "reset");
+        } else {
+            Log.w(TAG, "Attempted to broadcast reset from a non-leader device.");
+        }
     }
 }

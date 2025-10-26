@@ -105,6 +105,23 @@
                 android:max="10"
                 android:progress="3" />
 
+            <!-- PATCH: collective reset -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="end"> <!-- "end" pushes the content to the right -->
+
+                <Button
+                    android:id="@+id/reset_all_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Reset All"
+                    android:layout_marginTop="46dp"
+                    android:textColor="#FF0000"
+                    android:visibility="gone"/>          <!-- Initially hidden -->
+
+            </LinearLayout>
+
         </LinearLayout>
 
     </LinearLayout>
