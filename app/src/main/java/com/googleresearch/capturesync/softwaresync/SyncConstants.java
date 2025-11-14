@@ -30,7 +30,7 @@ public class SyncConstants {
   public static final long STALE_TIME_NS = 2 * HEARTBEAT_PERIOD_NS;
 
   /** Time until a given offsetNs by the leader is considered stale. */
-  public static final long STALE_OFFSET_TIME_NS = TimeUtils.secondsToNanos(60 * 60);
+  public static final long STALE_OFFSET_TIME_NS = TimeUtils.secondsToNanos(60 * 60 * 3);
 
   /** RPC. */
   public static final int RPC_PORT = 8244;
