@@ -1,50 +1,79 @@
-name: Assemble
+name: Build All Android App Branches
 
-on: [push, workflow_dispatch]
+on:
+  push:
+  workflow_dispatch:
 
 jobs:
-  assemble:
-    runs-on: ubuntu-latest
+  get-all-branches:
+    runs-on: self-hosted
+    outputs:
+      branches: ${{ steps.branches.outputs.branches }}
 
     steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v2
+      - name: List branches via GitHub API
+        id: branches
+        uses: actions/github-script@v7
         with:
-          distribution: 'adopt'
-          java-version: '8'
+          script: |
+            const all = await github.paginate(
+              github.rest.repos.listBranches,
+              {
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                per_page: 100
+              }
+            );
 
-      - name: Cache Gradle packages
-        uses: actions/cache@v2
+            // Optional: exclude special branches by name (edit as needed)
+            const exclude = new Set(["gh-pages"]);
+            const names = all
+              .map(b => b.name)
+              .filter(n => !exclude.has(n));
+
+            core.info(`Branches: ${names.join(", ")}`);
+            core.setOutput("branches", JSON.stringify(names));
+
+  build-all-branches-matrix:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    needs: get-all-branches
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJson(needs.get-all-branches.outputs.branches) }}
+
+    steps:
+      - name: Checkout repository (${{ matrix.branch }})
+        uses: actions/checkout@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
 
-      - name: Assemble release
-        run: ./gradlew assembleRelease
-
-      - name: Run lint for release
-        run: ./gradlew lintRelease
-
-      - name: Assemble debug
-        run: ./gradlew assembleDebug
-
-      - name: Run lint for debug
-        run: ./gradlew lintDebug
-
-      - name: Upload lint results
-        uses: actions/upload-artifact@v2
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          name: lint-results
-          path: app/build/reports/lint-results-*.*
+          distribution: temurin
+          java-version: '17'
 
-      - name: Cleanup Gradle Cache
-        # Remove some files from the Gradle cache, so they aren't cached by GitHub Actions.
-        # Restoring these files from a GitHub Actions cache might cause problems for future builds.
-        run: |
-          rm -f ~/.gradle/caches/modules-2/modules-2.lock
-          rm -f ~/.gradle/caches/modules-2/gc.properties
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Assemble Debug
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: apks-${{ matrix.branch }}-${{ github.sha || github.run_id }}
+          path: app/build/outputs/apk/**/*.apk
+          retention-days: 14
