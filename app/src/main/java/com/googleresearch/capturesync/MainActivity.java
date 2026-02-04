@@ -102,6 +102,8 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
     private static final int STATIC_LEN = 15_000;
+    private static final int VIDEO_PROFILE_QUALITY = CamcorderProfile.QUALITY_1080P;
+    private static final Integer VIDEO_BITRATE_OVERRIDE = null; // Set to e.g. 30_000_000 to override.
     private String lastTimeStamp;
     private PeriodCalculator periodCalculator;
 
@@ -1106,11 +1108,10 @@ public class MainActivity extends Activity {
         lastVideoPath = getOutputMediaFilePath();
         recorder.setOutputFile(lastVideoPath);
 
-//        CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_1080P);
-        CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_2160P);
+        CamcorderProfile profile = CamcorderProfile.get(VIDEO_PROFILE_QUALITY);
         recorder.setVideoSize(profile.videoFrameWidth, profile.videoFrameHeight);
-//        recorder.setVideoEncodingBitRate(profile.videoBitRate);
-        recorder.setVideoEncodingBitRate(30_000_000);
+        int bitRate = VIDEO_BITRATE_OVERRIDE != null ? VIDEO_BITRATE_OVERRIDE : profile.videoBitRate;
+        recorder.setVideoEncodingBitRate(bitRate);
 
         recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
 //    int rotation = getWindowManager().getDefaultDisplay().getRotation();
