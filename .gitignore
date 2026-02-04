@@ -37,3 +37,4 @@ opencamera-extended-firebase-adminsdk-yv5yz-e33a8ce5c1.json
 **/*.tif
 
 *.mp4
+.DS_Store
