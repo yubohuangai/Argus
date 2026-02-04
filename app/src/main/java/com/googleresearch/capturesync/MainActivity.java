@@ -104,6 +104,11 @@ public class MainActivity extends Activity {
     private static final int STATIC_LEN = 15_000;
     private static final int VIDEO_PROFILE_QUALITY = CamcorderProfile.QUALITY_1080P;
     private static final Integer VIDEO_BITRATE_OVERRIDE = null; // Set to e.g. 30_000_000 to override.
+    private static final boolean MATCH_VIEWFINDER_TO_VIDEO = true;
+    private static final int VIEWFINDER_MAX_WIDTH = 1920;
+    private static final int VIEWFINDER_MAX_HEIGHT = 1080;
+    private static final int VIEWFINDER_LAYOUT_MAX_WIDTH = 1280;
+    private static final int VIEWFINDER_LAYOUT_MAX_HEIGHT = 720;
     private String lastTimeStamp;
     private PeriodCalculator periodCalculator;
 
@@ -316,14 +321,16 @@ public class MainActivity extends Activity {
 
         // Fit an image inside a rectangle maximizing the resulting area and centering (coordinates are
         // rounded down).
+        int maxWidth = Math.min(displaySize.x, VIEWFINDER_LAYOUT_MAX_WIDTH);
+        int maxHeight = Math.min(displaySize.y, VIEWFINDER_LAYOUT_MAX_HEIGHT);
         params.width =
                 Math.min(
-                        displaySize.x,
-                        displaySize.y * viewfinderResolution.getWidth() / viewfinderResolution.getHeight());
+                        maxWidth,
+                        maxHeight * viewfinderResolution.getWidth() / viewfinderResolution.getHeight());
         params.height =
                 Math.min(
-                        displaySize.x * viewfinderResolution.getHeight() / viewfinderResolution.getWidth(),
-                        displaySize.y);
+                        maxWidth * viewfinderResolution.getHeight() / viewfinderResolution.getWidth(),
+                        maxHeight);
         params.gravity = Gravity.CENTER;
 
         surfaceView.setLayoutParams(params);
@@ -742,9 +749,14 @@ public class MainActivity extends Activity {
                 cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
         // We always capture the viewfinder. Its resolution is special: it's set chosen in Constants.
-        List<Size> viewfinderOutputSizes = Arrays.stream(scm.getOutputSizes(SurfaceTexture.class)).filter(
-                size -> size.getHeight() <= 1920 && size.getWidth() <= 1080
-        ).collect(Collectors.toList());
+        CamcorderProfile videoProfile = CamcorderProfile.get(VIDEO_PROFILE_QUALITY);
+        int maxViewfinderWidth = MATCH_VIEWFINDER_TO_VIDEO ? videoProfile.videoFrameWidth : VIEWFINDER_MAX_WIDTH;
+        int maxViewfinderHeight = MATCH_VIEWFINDER_TO_VIDEO ? videoProfile.videoFrameHeight : VIEWFINDER_MAX_HEIGHT;
+        List<Size> viewfinderOutputSizes = Arrays.stream(scm.getOutputSizes(SurfaceTexture.class))
+                .filter(
+                        size -> size.getWidth() <= maxViewfinderWidth && size.getHeight() <= maxViewfinderHeight
+                )
+                .collect(Collectors.toList());
         if (viewfinderOutputSizes.size() != 0) {
             Log.i(TAG, "Available viewfinder resolutions:");
             for (Size s : viewfinderOutputSizes) {
@@ -753,9 +765,17 @@ public class MainActivity extends Activity {
         } else {
             throw new IllegalStateException("Viewfinder unavailable!");
         }
-        // TODO: max
-        viewfinderResolution =
-                Collections.max(viewfinderOutputSizes, new CompareSizesByArea());
+        if (MATCH_VIEWFINDER_TO_VIDEO) {
+            viewfinderResolution =
+                    viewfinderOutputSizes.stream()
+                            .filter(size -> size.getWidth() == videoProfile.videoFrameWidth
+                                    && size.getHeight() == videoProfile.videoFrameHeight)
+                            .findFirst()
+                            .orElse(Collections.max(viewfinderOutputSizes, new CompareSizesByArea()));
+        } else {
+            viewfinderResolution =
+                    Collections.max(viewfinderOutputSizes, new CompareSizesByArea());
+        }
 
         Size[] rawOutputSizes = scm.getOutputSizes(ImageFormat.RAW10);
 //    if (rawOutputSizes != null) {
