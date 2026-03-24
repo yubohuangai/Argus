@@ -423,8 +423,11 @@ public class ImageMetadataSynchronizer {
       throw new IllegalArgumentException("CaptureResult is missing a CaptureRequestTag.");
     }
 
-    // It has no targets, doesn't affect the queue.
+    // No ImageReader targets (e.g. MP4-only mode): deliver metadata-only for sync/logging.
     if (crt.targets.isEmpty()) {
+      Output output = new Output(pendingImageQueues.size(), this);
+      output.result = result;
+      postCallbackWithSynchronizedOutputLocked(output);
       return;
     }
 

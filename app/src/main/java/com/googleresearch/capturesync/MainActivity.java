@@ -102,9 +102,9 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
     private static final int STATIC_LEN = 15_000;
-    private static final int VIDEO_PROFILE_QUALITY = CamcorderProfile.QUALITY_1080P;
+    /** Video resolution: QUALITY_1080P (1920×1080) or QUALITY_2160P (4K, 3840×2160) */
+    private static final int VIDEO_PROFILE_QUALITY = CamcorderProfile.QUALITY_2160P;
     private static final Integer VIDEO_BITRATE_OVERRIDE = null; // Set to e.g. 30_000_000 to override.
-    private static final boolean MATCH_VIEWFINDER_TO_VIDEO = true;
     private static final int VIEWFINDER_MAX_WIDTH = 1920;
     private static final int VIEWFINDER_MAX_HEIGHT = 1080;
     private static final int VIEWFINDER_LAYOUT_MAX_WIDTH = 1280;
@@ -177,6 +177,8 @@ public class MainActivity extends Activity {
     private Size viewfinderResolution;
     private Size rawImageResolution;
     private Size yuvImageResolution;
+    /** Resolved video profile (with fallback if 4K unsupported on device). */
+    private int resolvedVideoProfileQuality;
 
     // Top level UI windows.
     private int lastOrientation = Configuration.ORIENTATION_UNDEFINED;
@@ -745,13 +747,27 @@ public class MainActivity extends Activity {
         }
         cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId);
 
+        // Resolve video profile with fallback for devices that don't support 4K
+        int cameraIdInt = Integer.parseInt(cameraId);
+        if (VIDEO_PROFILE_QUALITY == CamcorderProfile.QUALITY_2160P
+                && CamcorderProfile.hasProfile(cameraIdInt, CamcorderProfile.QUALITY_2160P)) {
+            resolvedVideoProfileQuality = CamcorderProfile.QUALITY_2160P;
+        } else if (VIDEO_PROFILE_QUALITY == CamcorderProfile.QUALITY_2160P) {
+            resolvedVideoProfileQuality = CamcorderProfile.QUALITY_1080P;
+            Log.w(TAG, "4K (QUALITY_2160P) not supported on this camera, falling back to 1080p");
+        } else {
+            resolvedVideoProfileQuality = VIDEO_PROFILE_QUALITY;
+        }
+
         StreamConfigurationMap scm =
                 cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
         // We always capture the viewfinder. Its resolution is special: it's set chosen in Constants.
-        CamcorderProfile videoProfile = CamcorderProfile.get(VIDEO_PROFILE_QUALITY);
-        int maxViewfinderWidth = MATCH_VIEWFINDER_TO_VIDEO ? videoProfile.videoFrameWidth : VIEWFINDER_MAX_WIDTH;
-        int maxViewfinderHeight = MATCH_VIEWFINDER_TO_VIDEO ? videoProfile.videoFrameHeight : VIEWFINDER_MAX_HEIGHT;
+        // Use 1080p viewfinder when recording 4K to reduce CPU/GPU load (display isn't 4K anyway).
+        CamcorderProfile videoProfile = CamcorderProfile.get(resolvedVideoProfileQuality);
+        boolean matchViewfinderToVideo = (resolvedVideoProfileQuality != CamcorderProfile.QUALITY_2160P);
+        int maxViewfinderWidth = matchViewfinderToVideo ? videoProfile.videoFrameWidth : VIEWFINDER_MAX_WIDTH;
+        int maxViewfinderHeight = matchViewfinderToVideo ? videoProfile.videoFrameHeight : VIEWFINDER_MAX_HEIGHT;
         List<Size> viewfinderOutputSizes = Arrays.stream(scm.getOutputSizes(SurfaceTexture.class))
                 .filter(
                         size -> size.getWidth() <= maxViewfinderWidth && size.getHeight() <= maxViewfinderHeight
@@ -765,7 +781,7 @@ public class MainActivity extends Activity {
         } else {
             throw new IllegalStateException("Viewfinder unavailable!");
         }
-        if (MATCH_VIEWFINDER_TO_VIDEO) {
+        if (matchViewfinderToVideo) {
             viewfinderResolution =
                     viewfinderOutputSizes.stream()
                             .filter(size -> size.getWidth() == videoProfile.videoFrameWidth
@@ -788,22 +804,28 @@ public class MainActivity extends Activity {
 //    }
 //    rawImageResolution = Collections.max(Arrays.asList(rawOutputSizes), new CompareSizesByArea());
 
-        CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH);
-        List<Size> yuvOutputSizes = Arrays.stream(scm.getOutputSizes(ImageFormat.YUV_420_888)).filter(
-                size -> size.getHeight() <= profile.videoFrameHeight && size.getWidth() <= profile.videoFrameWidth
-        ).collect(Collectors.toList());
-        if (yuvOutputSizes.size() != 0) {
-            Log.i(TAG, "Available YUV resolutions:");
-            for (Size s : yuvOutputSizes) {
-                Log.i(TAG, s.toString());
+        if (Constants.SAVE_YUV) {
+            CamcorderProfile profile = CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH);
+            List<Size> yuvOutputSizes = Arrays.stream(scm.getOutputSizes(ImageFormat.YUV_420_888)).filter(
+                    size -> size.getHeight() <= profile.videoFrameHeight && size.getWidth() <= profile.videoFrameWidth
+            ).collect(Collectors.toList());
+            if (yuvOutputSizes.size() != 0) {
+                Log.i(TAG, "Available YUV resolutions:");
+                for (Size s : yuvOutputSizes) {
+                    Log.i(TAG, s.toString());
+                }
+            } else {
+                Log.i(TAG, "YUV unavailable!");
             }
+            yuvImageResolution = Collections.max(yuvOutputSizes, new CompareSizesByArea());
+            Log.i(TAG, "Chosen yuv resolution: " + yuvImageResolution);
         } else {
-            Log.i(TAG, "YUV unavailable!");
+            yuvImageResolution = null;
+            Log.i(TAG, "YUV stream disabled (MP4-only mode)");
         }
-        yuvImageResolution = Collections.max(yuvOutputSizes, new CompareSizesByArea());
-        Log.i(TAG, "Chosen viewfinder resolution: " + viewfinderResolution);
+        Log.i(TAG, "Video recording: " + videoProfile.videoFrameWidth + "x" + videoProfile.videoFrameHeight
+                + " (viewfinder: " + viewfinderResolution + ")");
 //    Log.i(TAG, "Chosen raw resolution: " + rawImageResolution);
-        Log.i(TAG, "Chosen yuv resolution: " + yuvImageResolution);
     }
 
     public void setUpcomingCaptureStill(long upcomingTriggerTimeNs) {
@@ -869,7 +891,9 @@ public class MainActivity extends Activity {
                     cameraController
                             .getRequestFactory()
                             .makeFrameInjectionRequest(
-                                    desiredExposureTimeNs, cameraController.getOutputSurfaces());
+                                    desiredExposureTimeNs,
+                                    cameraController.getOutputSurfaces(),
+                                    viewfinderSurface);
             captureSession.capture(
                     builder.build(), cameraController.getSynchronizerCaptureCallback(), cameraHandler);
         } catch (CameraAccessException e) {
@@ -1007,7 +1031,7 @@ public class MainActivity extends Activity {
         }
         outputSurfaces.addAll(cameraController.getOutputSurfaces());
         if (cameraController.getOutputSurfaces().isEmpty()) {
-            Log.e(TAG, "No output surfaces found.");
+            Log.i(TAG, "No ImageReader surfaces (video + viewfinder only).");
         }
 
         Log.d(TAG, "Outputs " + cameraController.getOutputSurfaces());
@@ -1128,7 +1152,7 @@ public class MainActivity extends Activity {
         lastVideoPath = getOutputMediaFilePath();
         recorder.setOutputFile(lastVideoPath);
 
-        CamcorderProfile profile = CamcorderProfile.get(VIDEO_PROFILE_QUALITY);
+        CamcorderProfile profile = CamcorderProfile.get(resolvedVideoProfileQuality);
         recorder.setVideoSize(profile.videoFrameWidth, profile.videoFrameHeight);
         int bitRate = VIDEO_BITRATE_OVERRIDE != null ? VIDEO_BITRATE_OVERRIDE : profile.videoBitRate;
         recorder.setVideoEncodingBitRate(bitRate);

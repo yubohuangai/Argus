@@ -28,16 +28,19 @@ public final class Constants {
    */
   public static final long FUTURE_TRIGGER_DELAY_NS = TimeUtils.millisToNanos(500);
 
-  /* Set at least one of {SAVE_YUV, SAVE_RAW} to true to save any data. */
-  public static final boolean SAVE_YUV = true;
+  /**
+   * Stream YUV to an ImageReader for live still capture (NV21/JPEG). Disabling reduces ISP/memory
+   * bandwidth and CPU when you only need MP4 recording.
+   */
+  public static final boolean SAVE_YUV = false;
 
   // TODO: Implement saving ImageFormat.RAW10 to DNG.
   // DngCreator works with ImageFormat.RAW_SENSOR but it is slow and power-hungry.
   public static final boolean SAVE_RAW = false;
 
   // TODO(samansari): Turn SAVE_JPG_FROM_YUV into a checkbox instead.
-  /* Set true to save a JPG to the gallery for preview. This is slow but gives you a "postview". */
-  public static final boolean SAVE_JPG_FROM_YUV = true;
+  /* Only used when SAVE_YUV is true. Saving JPG is CPU-heavy. */
+  public static final boolean SAVE_JPG_FROM_YUV = false;
   public static final int JPG_QUALITY = 95;
 
   public static final boolean USE_FULL_SCREEN_IMMERSIVE = false;

@@ -107,8 +107,15 @@ public class CaptureRequestFactory {
   }
 
 
+  /**
+   * @param fallbackSurface used when {@code imageSurfaces} is empty so the request has a valid
+   *     output (e.g. viewfinder); metadata-only sync still applies via empty {@code targetIndices}.
+   */
   public CaptureRequest.Builder makeFrameInjectionRequest(
-          long desiredExposureTimeNs, List<Surface> imageSurfaces) throws CameraAccessException {
+          long desiredExposureTimeNs,
+          List<Surface> imageSurfaces,
+          Surface fallbackSurface)
+          throws CameraAccessException {
     CaptureRequest.Builder builder = device.createCaptureRequest(TEMPLATE_PREVIEW);
     builder.set(CONTROL_MODE, CONTROL_MODE_AUTO);
     builder.set(CONTROL_AE_MODE, CONTROL_AE_MODE_OFF);
@@ -121,6 +128,9 @@ public class CaptureRequestFactory {
     for (int i = 0; i < imageSurfaces.size(); i++) {
       builder.addTarget(imageSurfaces.get(i));
       targetIndices.add(i);
+    }
+    if (imageSurfaces.isEmpty() && fallbackSurface != null) {
+      builder.addTarget(fallbackSurface);
     }
     builder.setTag(new CaptureRequestTag(targetIndices, PhaseAlignController.INJECT_FRAME));
 
