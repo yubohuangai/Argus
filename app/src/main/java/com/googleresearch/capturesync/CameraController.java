@@ -33,7 +33,6 @@ import com.googleresearch.capturesync.softwaresync.TimeDomainConverter;
 import com.googleresearch.capturesync.softwaresync.TimeUtils;
 import com.googleresearch.capturesync.softwaresync.phasealign.PeriodCalculator;
 
-import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.List;
@@ -156,16 +155,13 @@ public class CameraController {
 //                  "onCaptureCompleted: timestampMs = %,.3f, frameDurationMs = %,.6f, phase ="
 //                      + " %,.3f, sequence id = %d",
 //                  timestampMs, frameDurationMs, phaseMs, sequenceId));
-              // TODO: log this to csv
-              try {
-                synchronized(this) {
-                  if (context.getLogger() != null && !context.getLogger().isClosed() &&  context.getLastVideoSeqId() != null && context.getLastVideoSeqId() == sequenceId) {
-                    context.getLogger().logLine(String.format("%d",
-                            synchronizedTimestampNs));
-                  }
+              synchronized (this) {
+                if (context.getLogger() != null
+                        && !context.getLogger().isClosed()
+                        && context.getLastVideoSeqId() != null
+                        && context.getLastVideoSeqId() == sequenceId) {
+                  context.offerVideoCsvTimestamp(synchronizedTimestampNs, unSyncTimestampNs);
                 }
-              } catch (IOException e) {
-                e.printStackTrace();
               }
               if (shouldSaveFrame(synchronizedTimestampNs)) {
                 Log.d(TAG, "Sync frame found! Committing and processing");

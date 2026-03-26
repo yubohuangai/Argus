@@ -91,6 +91,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.stream.Collectors;
 
 import org.json.JSONException;
@@ -131,7 +132,95 @@ public class MainActivity extends Activity {
         return lastVideoSeqId;
     }
 
-    private Integer lastVideoSeqId;
+    /**
+     * Sequence id returned by {@link CameraCaptureSession#setRepeatingRequest} for the current video
+     * clip. Null while not recording video CSV: CSV lines are written only when
+     * {@code sequenceId == lastVideoSeqId}. Volatile so the camera thread sees the id as soon as it is
+     * assigned (avoids missing the first frame vs a separate "logging enabled" flag set afterward).
+     */
+    private volatile Integer lastVideoSeqId;
+
+    /** Last sensor timestamp written to the video CSV for this clip (dedupe duplicate callbacks). */
+    private long lastVideoCsvSensorTimestampNs = Long.MIN_VALUE;
+
+    /** Called when video capture sequence has ended and logger is closed. */
+    public void clearVideoRecordingSequenceId() {
+        lastVideoSeqId = null;
+    }
+
+    /** FIFO timestamps to pair with muxed encoder output (one CSV line per muxed sample). */
+    private final LinkedBlockingQueue<Long> videoCsvTimestampQueue = new LinkedBlockingQueue<>();
+
+    private Mp4SurfaceEncoder mp4SurfaceEncoder;
+
+    /**
+     * Enqueue a leader-time timestamp for the next muxed video frame. CSV is written from the
+     * encoder callback, not here, so line count matches muxed samples.
+     */
+    public void offerVideoCsvTimestamp(long synchronizedTimestampNs, long unSyncTimestampNs) {
+        if (mLogger == null || mLogger.isClosed() || lastVideoSeqId == null) {
+            return;
+        }
+        if (!tryAcceptVideoCsvTimestamp(unSyncTimestampNs)) {
+            return;
+        }
+        videoCsvTimestampQueue.offer(synchronizedTimestampNs);
+    }
+
+    /**
+     * Stops muxer/codec after the capture sequence ends (same point MediaRecorder.stop() ran).
+     * Blocks the camera thread until the file is finalized.
+     */
+    public void finishVideoRecordingFromCaptureSequence() {
+        try {
+            if (mp4SurfaceEncoder == null) {
+                Log.e(TAG, "finishVideoRecording: encoder missing");
+                if (mLogger != null) {
+                    mLogger.close();
+                }
+                setLogger(null);
+                clearVideoRecordingSequenceId();
+                videoCsvTimestampQueue.clear();
+                return;
+            }
+            mp4SurfaceEncoder.stopAndRelease(
+                    () -> {
+                        if (isVideoRecording()) {
+                            setVideoRecording(false);
+                        } else {
+                            deleteUnusedVideo();
+                        }
+                        if (mLogger != null) {
+                            mLogger.close();
+                        }
+                        setLogger(null);
+                        clearVideoRecordingSequenceId();
+                        int leftover = videoCsvTimestampQueue.size();
+                        if (leftover > 0) {
+                            Log.w(
+                                    TAG,
+                                    leftover
+                                            + " camera timestamps had no muxed sample (encoder"
+                                            + " drops); CSV lines match MP4 frames only");
+                        }
+                        videoCsvTimestampQueue.clear();
+                    });
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Log.e(TAG, "finishVideoRecording interrupted", e);
+        }
+    }
+
+    /**
+     * @return true if this timestamp should be logged (not a duplicate of the previous line).
+     */
+    public boolean tryAcceptVideoCsvTimestamp(long sensorTimestampNs) {
+        if (sensorTimestampNs == lastVideoCsvSensorTimestampNs) {
+            return false;
+        }
+        lastVideoCsvSensorTimestampNs = sensorTimestampNs;
+        return true;
+    }
 
     public int getCurSequence() {
         return curSequence;
@@ -156,11 +245,6 @@ public class MainActivity extends Activity {
     // Phase config file to use for phase alignment, configs are located in the raw folder.
     private final int phaseConfigFile = R.raw.default_phaseconfig;
 
-    public MediaRecorder getMediaRecorder() {
-        return mediaRecorder;
-    }
-
-    private MediaRecorder mediaRecorder = new MediaRecorder();
     private boolean isVideoRecording = false;
 
     // Camera controls.
@@ -1180,18 +1264,40 @@ public class MainActivity extends Activity {
         Log.d(TAG, "Starting video.");
         Toast.makeText(this, "Started recording video", Toast.LENGTH_LONG).show();
 
+        lastVideoSeqId = null;
+        lastVideoCsvSensorTimestampNs = Long.MIN_VALUE;
+        videoCsvTimestampQueue.clear();
         isVideoRecording = true;
+        boolean encoderRunning = false;
         try {
-            mediaRecorder = setUpMediaRecorder(surface);
+            lastVideoPath = getOutputMediaFilePath();
             String filename = lastTimeStamp + ".csv";
-            // Creates frame timestamps logger
             try {
                 mLogger = new CSVLogger(SUBDIR_NAME, filename, this);
             } catch (IOException e) {
                 e.printStackTrace();
             }
-            mediaRecorder.prepare();
-            Log.d(TAG, "MediaRecorder surface " + surface);
+            CamcorderProfile profile = CamcorderProfile.get(resolvedVideoProfileQuality);
+            int bitRate =
+                    VIDEO_BITRATE_OVERRIDE != null ? VIDEO_BITRATE_OVERRIDE : profile.videoBitRate;
+            int frameRate = profile.videoFrameRate;
+            if (frameRate <= 0) {
+                frameRate = 30;
+            }
+            if (mp4SurfaceEncoder == null) {
+                mp4SurfaceEncoder = new Mp4SurfaceEncoder();
+            }
+            mp4SurfaceEncoder.startEncoding(
+                    surface,
+                    lastVideoPath,
+                    profile.videoFrameWidth,
+                    profile.videoFrameHeight,
+                    bitRate,
+                    frameRate,
+                    mLogger,
+                    videoCsvTimestampQueue);
+            encoderRunning = true;
+            Log.d(TAG, "Mp4SurfaceEncoder started for " + lastVideoPath);
             CaptureRequest.Builder previewRequestBuilder =
                     cameraController
                             .getRequestFactory()
@@ -1205,21 +1311,42 @@ public class MainActivity extends Activity {
 
             captureSession.stopRepeating();
 
-            mediaRecorder.start();
-            lastVideoSeqId = captureSession.setRepeatingRequest(
-                    previewRequestBuilder.build(),
-                    cameraController.getSynchronizerCaptureCallback(),
-                    cameraHandler);
+            lastVideoSeqId =
+                    captureSession.setRepeatingRequest(
+                            previewRequestBuilder.build(),
+                            cameraController.getSynchronizerCaptureCallback(),
+                            cameraHandler);
         } catch (CameraAccessException e) {
             Log.w(TAG, "Unable to create video request.");
-        } catch (IOException e) {
-            e.printStackTrace();
+            lastVideoSeqId = null;
+            isVideoRecording = false;
+            if (encoderRunning) {
+                try {
+                    mp4SurfaceEncoder.stopAndRelease(() -> {});
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    mp4SurfaceEncoder.releaseQuietly();
+                }
+            }
+            if (mLogger != null) {
+                mLogger.close();
+                setLogger(null);
+            }
+        } catch (IOException | InterruptedException e) {
+            Log.e(TAG, "Video encoder start failed", e);
+            lastVideoSeqId = null;
+            isVideoRecording = false;
+            if (mp4SurfaceEncoder != null) {
+                mp4SurfaceEncoder.releaseQuietly();
+            }
+            if (mLogger != null) {
+                mLogger.close();
+                setLogger(null);
+            }
         }
     }
 
     public void stopVideo() {
-        // Switch to preview again
-
         Toast.makeText(this, "Stopped recording video", Toast.LENGTH_LONG).show();
         startPreview();
     }
@@ -1335,6 +1462,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (mp4SurfaceEncoder != null) {
+            mp4SurfaceEncoder.quitSafely();
+            mp4SurfaceEncoder = null;
+        }
         super.onDestroy();
     }
 }
