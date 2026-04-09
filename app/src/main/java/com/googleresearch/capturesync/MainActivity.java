@@ -546,6 +546,7 @@ public class MainActivity extends Activity {
                             // This part now runs in the background and does not block the UI.
                             long periodNs = periodCalculator.getPeriodNs();
                             Log.d(TAG, "Calculated period: " + periodNs);
+                            Log.i(TAG, String.format("PeriodCalculator result: %d ns", periodNs));
 
                             // --- Step 3: Post the final UI update back to the main thread ---
                             runOnUiThread(() -> {

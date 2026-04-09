@@ -149,12 +149,12 @@ public class CameraController {
 
               long phaseNs = phaseAlignController.updateCaptureTimestamp(synchronizedTimestampNs);
               double phaseMs = TimeUtils.nanosToMillis((double) phaseNs);
-//          Log.v(
-//              TAG,
-//              String.format(
-//                  "onCaptureCompleted: timestampMs = %,.3f, frameDurationMs = %,.6f, phase ="
-//                      + " %,.3f, sequence id = %d",
-//                  timestampMs, frameDurationMs, phaseMs, sequenceId));
+              Log.d(
+                      TAG,
+                      String.format(
+                              "onCaptureCompleted: timestampMs = %,.3f, frameDurationMs = %,.6f, phase ="
+                                      + " %,.3f, sequence id = %d",
+                              timestampMs, frameDurationMs, phaseMs, sequenceId));
               synchronized (this) {
                 if (context.getLogger() != null
                         && !context.getLogger().isClosed()
