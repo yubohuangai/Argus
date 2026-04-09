@@ -674,10 +674,16 @@ public class MainActivity extends Activity {
             phaseAlignButton.setOnClickListener(
                     view -> {
                         Log.d(TAG, "Broadcasting phase alignment request.");
+                        // Optimistically show RUNNING in case this device is also a participant.
+                        updateAlignButtonState(PhaseAlignController.AlignmentState.RUNNING);
                         // Request phase alignment on all devices.
                         ((SoftwareSyncLeader) softwareSyncController.softwareSync)
                                 .broadcastRpc(SoftwareSyncController.METHOD_DO_PHASE_ALIGN, "");
                     });
+
+            // Reflect the phase alignment loop's terminal state on the button.
+            phaseAlignController.setAlignmentListener(this::updateAlignButtonState);
+            updateAlignButtonState(PhaseAlignController.AlignmentState.IDLE);
 
             exposureSeekBar.setOnSeekBarChangeListener(
                     new OnSeekBarChangeListener() {
@@ -1049,6 +1055,36 @@ public class MainActivity extends Activity {
     void updatePhaseTextView(long phaseErrorNs) {
         phaseTextView.setText(
                 String.format("Phase Error: %.2f ms", TimeUtils.nanosToMillis((double) phaseErrorNs)));
+    }
+
+    /** Reflect the phase alignment loop's terminal state on the Align Phases button. */
+    void updateAlignButtonState(PhaseAlignController.AlignmentState state) {
+        if (phaseAlignButton == null) {
+            return;
+        }
+        switch (state) {
+            case RUNNING:
+                phaseAlignButton.setEnabled(false);
+                phaseAlignButton.setText("ALIGNING...");
+                phaseAlignButton.setTextColor(Color.BLACK);
+                break;
+            case ALIGNED:
+                phaseAlignButton.setEnabled(true);
+                phaseAlignButton.setText("ALIGNED \u2713");
+                phaseAlignButton.setTextColor(Color.parseColor("#006400"));
+                break;
+            case FAILED:
+                phaseAlignButton.setEnabled(true);
+                phaseAlignButton.setText("NOT ALIGNED \u2717");
+                phaseAlignButton.setTextColor(Color.RED);
+                break;
+            case IDLE:
+            default:
+                phaseAlignButton.setEnabled(true);
+                phaseAlignButton.setText("ALIGN PHASES");
+                phaseAlignButton.setTextColor(Color.BLACK);
+                break;
+        }
     }
 
     private long seekBarValueToExposureNs(int value) {

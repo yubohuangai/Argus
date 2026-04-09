@@ -34,6 +34,32 @@ public class PhaseAlignController {
     public static final String INJECT_FRAME = "injection_frame";
     private static final String TAG = "PhaseAlignController";
 
+    /** Terminal states of the phase alignment loop, reported to the UI. */
+    public enum AlignmentState {
+        IDLE,
+        RUNNING,
+        ALIGNED,
+        FAILED
+    }
+
+    /** Listener for phase alignment state transitions. */
+    public interface AlignmentListener {
+        void onAlignmentStateChanged(AlignmentState state);
+    }
+
+    private AlignmentListener alignmentListener;
+
+    public void setAlignmentListener(AlignmentListener listener) {
+        this.alignmentListener = listener;
+    }
+
+    private void fireState(AlignmentState state) {
+        AlignmentListener l = alignmentListener;
+        if (l != null) {
+            context.runOnUiThread(() -> l.onAlignmentStateChanged(state));
+        }
+    }
+
     // Maximum number of phase alignment iteration steps in the alignment process.
     // TODO(samansari): Make this a parameter that you pass in to this class. Then make the class that
     // constructs this pass the constant in.
@@ -101,6 +127,7 @@ public class PhaseAlignController {
                 return;
             }
             inAlignState = true;
+            fireState(AlignmentState.RUNNING);
             // Start inserting frames every {@code PHASE_SETTLE_DELAY_MS} ms to try and push the phase to
             // the goal phase. Stop after aligned to threshold or after {@code MAX_ITERATIONS}.
             handler.post(() -> work(MAX_ITERATIONS));
@@ -120,6 +147,7 @@ public class PhaseAlignController {
             }
 
             Log.d(TAG, "Aligned.");
+            fireState(AlignmentState.ALIGNED);
         } else if (!latestResponse.isAligned() && iterationsLeft > 0) {
             // Not aligned but able to run another alignment iteration.
             doPhaseAlignStep();
@@ -137,6 +165,7 @@ public class PhaseAlignController {
                 inAlignState = false;
             }
             Log.d(TAG, "Finishing alignment, reached max iterations.");
+            fireState(AlignmentState.FAILED);
         }
     }
 }
