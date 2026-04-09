@@ -17,18 +17,19 @@ import android.util.Log;
 import android.view.Surface;
 
 import com.googleresearch.capturesync.softwaresync.CSVLogger;
+import com.googleresearch.capturesync.softwaresync.TimeDomainConverter;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * H.264 encoder + MP4 muxer using a persistent input {@link Surface}. Writes one CSV line per muxed
- * video sample by FIFO-pairing with timestamps offered from Camera2 ({@link
- * MainActivity#offerVideoCsvTimestamp}).
+ * video sample using the muxer's own {@code BufferInfo.presentationTimeUs}, which Camera2 forwards
+ * from the sensor timestamp through the input surface. This guarantees {@code csv_count ==
+ * frame_count} by construction (one loop produces both).
  */
 public final class Mp4SurfaceEncoder {
     private static final String TAG = "Mp4SurfaceEncoder";
@@ -58,7 +59,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            BlockingQueue<Long> timestampQueue)
+            TimeDomainConverter timeDomainConverter)
             throws InterruptedException, IOException {
         CountDownLatch started = new CountDownLatch(1);
         IOException[] holder = new IOException[1];
@@ -73,7 +74,7 @@ public final class Mp4SurfaceEncoder {
                                 bitRate,
                                 frameRate,
                                 csvLogger,
-                                timestampQueue);
+                                timeDomainConverter);
                     } catch (IOException e) {
                         holder[0] = e;
                     } finally {
@@ -96,7 +97,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            BlockingQueue<Long> timestampQueue)
+            TimeDomainConverter timeDomainConverter)
             throws IOException {
         resourcesReleased.set(false);
         muxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -135,19 +136,21 @@ public final class Mp4SurfaceEncoder {
                                     encoded.limit(info.offset + info.size);
                                     muxer.writeSampleData(videoTrackIndex, encoded, info);
                                 }
-                                Long leaderTsNs = timestampQueue.poll();
-                                if (leaderTsNs != null
-                                        && csvLogger != null
-                                        && !csvLogger.isClosed()) {
+                                if (csvLogger != null && !csvLogger.isClosed()) {
+                                    // Camera2 forwards SENSOR_TIMESTAMP (ns) through the input
+                                    // surface as presentationTimeUs (us, truncated). Convert back
+                                    // to ns and into the leader time domain so the CSV row is
+                                    // produced from the same loop that muxes the frame, making
+                                    // csv_count == frame_count guaranteed.
+                                    long localSensorTimestampNs = info.presentationTimeUs * 1000L;
+                                    long leaderTsNs =
+                                            timeDomainConverter.leaderTimeForLocalTimeNs(
+                                                    localSensorTimestampNs);
                                     try {
                                         csvLogger.logLine(Long.toString(leaderTsNs));
                                     } catch (IOException e) {
                                         Log.e(TAG, "CSV log failed", e);
                                     }
-                                } else if (leaderTsNs == null) {
-                                    Log.w(
-                                            TAG,
-                                            "No camera timestamp for muxed sample (empty queue); CSV line skipped");
                                 }
                             }
                         } catch (Exception e) {

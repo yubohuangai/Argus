@@ -91,7 +91,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.stream.Collectors;
 
 import org.json.JSONException;
@@ -140,32 +139,12 @@ public class MainActivity extends Activity {
      */
     private volatile Integer lastVideoSeqId;
 
-    /** Last sensor timestamp written to the video CSV for this clip (dedupe duplicate callbacks). */
-    private long lastVideoCsvSensorTimestampNs = Long.MIN_VALUE;
-
     /** Called when video capture sequence has ended and logger is closed. */
     public void clearVideoRecordingSequenceId() {
         lastVideoSeqId = null;
     }
 
-    /** FIFO timestamps to pair with muxed encoder output (one CSV line per muxed sample). */
-    private final LinkedBlockingQueue<Long> videoCsvTimestampQueue = new LinkedBlockingQueue<>();
-
     private Mp4SurfaceEncoder mp4SurfaceEncoder;
-
-    /**
-     * Enqueue a leader-time timestamp for the next muxed video frame. CSV is written from the
-     * encoder callback, not here, so line count matches muxed samples.
-     */
-    public void offerVideoCsvTimestamp(long synchronizedTimestampNs, long unSyncTimestampNs) {
-        if (mLogger == null || mLogger.isClosed() || lastVideoSeqId == null) {
-            return;
-        }
-        if (!tryAcceptVideoCsvTimestamp(unSyncTimestampNs)) {
-            return;
-        }
-        videoCsvTimestampQueue.offer(synchronizedTimestampNs);
-    }
 
     /**
      * Stops muxer/codec after the capture sequence ends (same point MediaRecorder.stop() ran).
@@ -180,7 +159,6 @@ public class MainActivity extends Activity {
                 }
                 setLogger(null);
                 clearVideoRecordingSequenceId();
-                videoCsvTimestampQueue.clear();
                 return;
             }
             mp4SurfaceEncoder.stopAndRelease(
@@ -195,31 +173,11 @@ public class MainActivity extends Activity {
                         }
                         setLogger(null);
                         clearVideoRecordingSequenceId();
-                        int leftover = videoCsvTimestampQueue.size();
-                        if (leftover > 0) {
-                            Log.w(
-                                    TAG,
-                                    leftover
-                                            + " camera timestamps had no muxed sample (encoder"
-                                            + " drops); CSV lines match MP4 frames only");
-                        }
-                        videoCsvTimestampQueue.clear();
                     });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             Log.e(TAG, "finishVideoRecording interrupted", e);
         }
-    }
-
-    /**
-     * @return true if this timestamp should be logged (not a duplicate of the previous line).
-     */
-    public boolean tryAcceptVideoCsvTimestamp(long sensorTimestampNs) {
-        if (sensorTimestampNs == lastVideoCsvSensorTimestampNs) {
-            return false;
-        }
-        lastVideoCsvSensorTimestampNs = sensorTimestampNs;
-        return true;
     }
 
     public int getCurSequence() {
@@ -1333,8 +1291,6 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Started recording video", Toast.LENGTH_LONG).show();
 
         lastVideoSeqId = null;
-        lastVideoCsvSensorTimestampNs = Long.MIN_VALUE;
-        videoCsvTimestampQueue.clear();
         isVideoRecording = true;
         boolean encoderRunning = false;
         try {
@@ -1363,7 +1319,7 @@ public class MainActivity extends Activity {
                     bitRate,
                     frameRate,
                     mLogger,
-                    videoCsvTimestampQueue);
+                    softwareSyncController.softwareSync);
             encoderRunning = true;
             Log.d(TAG, "Mp4SurfaceEncoder started for " + lastVideoPath);
             CaptureRequest.Builder previewRequestBuilder =
