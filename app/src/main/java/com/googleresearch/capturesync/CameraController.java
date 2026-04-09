@@ -155,14 +155,6 @@ public class CameraController {
 //                  "onCaptureCompleted: timestampMs = %,.3f, frameDurationMs = %,.6f, phase ="
 //                      + " %,.3f, sequence id = %d",
 //                  timestampMs, frameDurationMs, phaseMs, sequenceId));
-              synchronized (this) {
-                if (context.getLogger() != null
-                        && !context.getLogger().isClosed()
-                        && context.getLastVideoSeqId() != null
-                        && context.getLastVideoSeqId() == sequenceId) {
-                  context.offerVideoCsvTimestamp(synchronizedTimestampNs, unSyncTimestampNs);
-                }
-              }
               if (shouldSaveFrame(synchronizedTimestampNs)) {
                 Log.d(TAG, "Sync frame found! Committing and processing");
                 Frame frame = new Frame(result, output);
