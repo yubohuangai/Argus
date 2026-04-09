@@ -149,6 +149,14 @@ public class SoftwareSyncClient extends SoftwareSyncBase {
   }
 
   /**
+   * Send a user-defined RPC from this client to the leader. Symmetric counterpart to
+   * {@link SoftwareSyncLeader#broadcastRpc(int, String)}.
+   */
+  public void sendRpcToLeader(int method, String payload) {
+    sendRpc(method, payload, getLeaderAddress());
+  }
+
+  /**
    * Propagate state machine depending on lastLeaderResponseTimeNs and currentState. This should be
    * called periodically, such as every time a heartbeat is sent, and after it receives an offsetNs
    * update RPC.

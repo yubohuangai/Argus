@@ -70,10 +70,21 @@ public class SoftwareSyncController implements Closeable {
     /* Leader broadcasts the canonical SENSOR_FRAME_DURATION-derived period to all clients. */
     public static final int METHOD_BROADCAST_PERIOD = 200_006;
 
+    /* Client reports its phase alignment terminal state to the leader. Payload: name,state,diffMs */
+    public static final int METHOD_REPORT_ALIGNMENT_STATUS = 200_007;
+
     private long upcomingTriggerTimeNs;
 
     /** Last canonical period broadcast by this leader, replayed to late-joining clients. */
     private Long lastBroadcastPeriodNs = null;
+
+    /**
+     * Per-device alignment status (display strings), keyed by device name. Populated on the
+     * leader from local-leader updates and from {@link #METHOD_REPORT_ALIGNMENT_STATUS} RPCs.
+     * LinkedHashMap so the leader's status reliably appears first if inserted first.
+     */
+    private final java.util.LinkedHashMap<String, String> alignmentStatusByName =
+            new java.util.LinkedHashMap<>();
 
     /**
      * Constructor passed in with: - context - For setting UI elements and triggering captures. -
@@ -199,6 +210,23 @@ public class SoftwareSyncController implements Closeable {
                                             METHOD_BROADCAST_PERIOD, String.valueOf(lastBroadcastPeriodNs));
                         }
                     });
+            // Leader-only: clients report their phase alignment terminal state here.
+            leaderRpcs.put(
+                    METHOD_REPORT_ALIGNMENT_STATUS,
+                    payload -> {
+                        // Payload: name,state,diffMs
+                        String[] parts = payload.split(",", 3);
+                        if (parts.length != 3) {
+                            Log.w(TAG, "Malformed alignment status payload: " + payload);
+                            return;
+                        }
+                        String reporterName = parts[0];
+                        String state = parts[1];
+                        String diffMs = parts[2];
+                        alignmentStatusByName.put(
+                                reporterName, formatAlignmentStatus(state, diffMs));
+                        updateClientsUI();
+                    });
             leaderRpcs.put(SyncConstants.METHOD_MSG_REMOVED_CLIENT, payload -> updateClientsUI());
             leaderRpcs.put(SyncConstants.METHOD_MSG_SYNCING, payload -> updateClientsUI());
             leaderRpcs.put(SyncConstants.METHOD_MSG_OFFSET_UPDATED, payload -> updateClientsUI());
@@ -276,9 +304,8 @@ public class SoftwareSyncController implements Closeable {
     }
 
     /**
-     * Show the number of connected clients on the leader status UI.
-     *
-     * <p>If the number of clients doesn't equal TOTAL_NUM_CLIENTS, show as bright red.
+     * Show the number of connected clients on the leader status UI, with each device's
+     * latest phase alignment status appended.
      */
     private void updateClientsUI() {
         SoftwareSyncLeader leader = ((SoftwareSyncLeader) softwareSync);
@@ -286,20 +313,84 @@ public class SoftwareSyncController implements Closeable {
         context.runOnUiThread(
                 () -> {
                     StringBuilder msg = new StringBuilder();
+                    String leaderName = softwareSync.getName();
+                    String leaderStatus = alignmentStatusByName.get(leaderName);
                     msg.append(
-                            String.format("Leader %s: %d clients.\n", softwareSync.getName(), clientCount));
+                            String.format(
+                                    "Leader %s: %d clients.%s\n",
+                                    leaderName,
+                                    clientCount,
+                                    leaderStatus == null ? "" : " | " + leaderStatus));
                     for (Entry<InetAddress, ClientInfo> entry : leader.getClients().entrySet()) {
                         ClientInfo client = entry.getValue();
+                        String status = alignmentStatusByName.get(client.name());
+                        String suffix = status == null ? "" : " | " + status;
                         if (client.syncAccuracy() == 0) {
-                            msg.append(String.format("-Client %s: syncing...\n", client.name()));
+                            msg.append(
+                                    String.format("-Client %s: syncing...%s\n", client.name(), suffix));
                         } else {
                             msg.append(
                                     String.format(
-                                            "-Client %s: %.2f ms sync\n", client.name(), client.syncAccuracy() / 1e6));
+                                            "-Client %s: %.2f ms sync%s\n",
+                                            client.name(), client.syncAccuracy() / 1e6, suffix));
                         }
                     }
                     statusView.setText(msg.toString());
                 });
+    }
+
+    /** Render an alignment state + phase error into a short display string. */
+    private static String formatAlignmentStatus(String state, String diffMs) {
+        switch (state) {
+            case "ALIGNED":
+                return "ALIGNED \u2713 " + diffMs + " ms";
+            case "FAILED":
+                return "NOT ALIGNED \u2717 " + diffMs + " ms";
+            case "RUNNING":
+                return "ALIGNING\u2026";
+            case "IDLE":
+            default:
+                return "";
+        }
+    }
+
+    /**
+     * Called from {@link MainActivity}'s {@link PhaseAlignController.AlignmentListener} on every
+     * device. On the leader, updates its own entry in the status map and refreshes the UI.
+     * On a client, sends a {@link #METHOD_REPORT_ALIGNMENT_STATUS} RPC to the leader.
+     */
+    public void reportLocalAlignmentStatus(
+            PhaseAlignController.AlignmentState state, long diffFromGoalNs) {
+        String stateName = state.name();
+        String diffMs = String.format(java.util.Locale.US, "%.2f",
+                TimeUtils.nanosToMillis((double) diffFromGoalNs));
+        if (isLeader) {
+            alignmentStatusByName.put(
+                    softwareSync.getName(), formatAlignmentStatus(stateName, diffMs));
+            updateClientsUI();
+        } else if (softwareSync instanceof SoftwareSyncClient) {
+            String payload = String.format("%s,%s,%s", softwareSync.getName(), stateName, diffMs);
+            ((SoftwareSyncClient) softwareSync)
+                    .sendRpcToLeader(METHOD_REPORT_ALIGNMENT_STATUS, payload);
+        }
+    }
+
+    /**
+     * Leader-side: pre-mark every known client (and the leader itself) as ALIGNING the moment
+     * the leader broadcasts {@link #METHOD_DO_PHASE_ALIGN}, so the UI reflects the in-progress
+     * state immediately rather than waiting for terminal reports to drift in.
+     */
+    public void markAllDevicesAligning() {
+        if (!isLeader || !(softwareSync instanceof SoftwareSyncLeader)) {
+            return;
+        }
+        SoftwareSyncLeader leader = (SoftwareSyncLeader) softwareSync;
+        String aligningStr = formatAlignmentStatus("RUNNING", "");
+        alignmentStatusByName.put(softwareSync.getName(), aligningStr);
+        for (Entry<InetAddress, ClientInfo> entry : leader.getClients().entrySet()) {
+            alignmentStatusByName.put(entry.getValue().name(), aligningStr);
+        }
+        updateClientsUI();
     }
 
     @Override

@@ -44,7 +44,13 @@ public class PhaseAlignController {
 
     /** Listener for phase alignment state transitions. */
     public interface AlignmentListener {
-        void onAlignmentStateChanged(AlignmentState state);
+        /**
+         * @param state new terminal/transient state of the alignment loop
+         * @param diffFromGoalNs phase error against the goal at the moment of the transition;
+         *     meaningful for {@link AlignmentState#ALIGNED} and {@link AlignmentState#FAILED},
+         *     0 for {@link AlignmentState#RUNNING}/{@link AlignmentState#IDLE}.
+         */
+        void onAlignmentStateChanged(AlignmentState state, long diffFromGoalNs);
     }
 
     private AlignmentListener alignmentListener;
@@ -53,10 +59,10 @@ public class PhaseAlignController {
         this.alignmentListener = listener;
     }
 
-    private void fireState(AlignmentState state) {
+    private void fireState(AlignmentState state, long diffFromGoalNs) {
         AlignmentListener l = alignmentListener;
         if (l != null) {
-            context.runOnUiThread(() -> l.onAlignmentStateChanged(state));
+            context.runOnUiThread(() -> l.onAlignmentStateChanged(state, diffFromGoalNs));
         }
     }
 
@@ -127,7 +133,7 @@ public class PhaseAlignController {
                 return;
             }
             inAlignState = true;
-            fireState(AlignmentState.RUNNING);
+            fireState(AlignmentState.RUNNING, 0);
             // Start inserting frames every {@code PHASE_SETTLE_DELAY_MS} ms to try and push the phase to
             // the goal phase. Stop after aligned to threshold or after {@code MAX_ITERATIONS}.
             handler.post(() -> work(MAX_ITERATIONS));
@@ -147,7 +153,7 @@ public class PhaseAlignController {
             }
 
             Log.d(TAG, "Aligned.");
-            fireState(AlignmentState.ALIGNED);
+            fireState(AlignmentState.ALIGNED, latestResponse.diffFromGoalNs());
         } else if (!latestResponse.isAligned() && iterationsLeft > 0) {
             // Not aligned but able to run another alignment iteration.
             doPhaseAlignStep();
@@ -165,7 +171,7 @@ public class PhaseAlignController {
                 inAlignState = false;
             }
             Log.d(TAG, "Finishing alignment, reached max iterations.");
-            fireState(AlignmentState.FAILED);
+            fireState(AlignmentState.FAILED, latestResponse.diffFromGoalNs());
         }
     }
 }

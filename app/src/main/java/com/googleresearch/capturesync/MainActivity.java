@@ -675,15 +675,15 @@ public class MainActivity extends Activity {
             phaseAlignButton.setOnClickListener(
                     view -> {
                         Log.d(TAG, "Broadcasting phase alignment request.");
-                        // Optimistically show RUNNING in case this device is also a participant.
+                        // Optimistically show RUNNING in case this device is also a participant,
+                        // and mark every known client as ALIGNING in the leader's status panel.
                         updateAlignButtonState(PhaseAlignController.AlignmentState.RUNNING);
+                        softwareSyncController.markAllDevicesAligning();
                         // Request phase alignment on all devices.
                         ((SoftwareSyncLeader) softwareSyncController.softwareSync)
                                 .broadcastRpc(SoftwareSyncController.METHOD_DO_PHASE_ALIGN, "");
                     });
 
-            // Reflect the phase alignment loop's terminal state on the button.
-            phaseAlignController.setAlignmentListener(this::updateAlignButtonState);
             updateAlignButtonState(PhaseAlignController.AlignmentState.IDLE);
 
             exposureSeekBar.setOnSeekBarChangeListener(
@@ -775,6 +775,17 @@ public class MainActivity extends Activity {
             softwareSyncController =
                     new SoftwareSyncController(this, phaseAlignController, softwaresyncStatusTextView);
             setLeaderClientControls(softwareSyncController.isLeader());
+
+            // Wire one alignment listener that updates the local button (no-op on clients,
+            // whose button is invisible) AND reports the local terminal state to the leader
+            // (no-op on the leader itself, which updates its own map directly).
+            phaseAlignController.setAlignmentListener(
+                    (state, diffFromGoalNs) -> {
+                        updateAlignButtonState(state);
+                        if (softwareSyncController != null) {
+                            softwareSyncController.reportLocalAlignmentStatus(state, diffFromGoalNs);
+                        }
+                    });
         } catch (IllegalStateException e) {
             // If wifi is disabled, start pick wifi activity.
             Log.e(
