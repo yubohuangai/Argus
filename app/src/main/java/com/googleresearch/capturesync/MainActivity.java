@@ -1066,7 +1066,9 @@ public class MainActivity extends Activity {
                 getPeriodButton.setTextColor(Color.parseColor("#006400"));
                 getPeriodButton.setText("Period: " + periodNs + " ns (sensor)");
             }
-            // Leader-to-client broadcast of this canonical value is wired up in a follow-up commit.
+            if (softwareSyncController != null) {
+                softwareSyncController.broadcastCanonicalPeriod(periodNs);
+            }
         });
     }
 

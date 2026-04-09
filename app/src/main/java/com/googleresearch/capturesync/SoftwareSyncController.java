@@ -67,7 +67,13 @@ public class SoftwareSyncController implements Closeable {
     // PATCH: collective reset
     public static final int METHOD_RESET_ALL = 200_005;
 
+    /* Leader broadcasts the canonical SENSOR_FRAME_DURATION-derived period to all clients. */
+    public static final int METHOD_BROADCAST_PERIOD = 200_006;
+
     private long upcomingTriggerTimeNs;
+
+    /** Last canonical period broadcast by this leader, replayed to late-joining clients. */
+    private Long lastBroadcastPeriodNs = null;
 
     /**
      * Constructor passed in with: - context - For setting UI elements and triggering captures. -
@@ -156,6 +162,14 @@ public class SoftwareSyncController implements Closeable {
                 });
 
         sharedRpcs.put(
+                METHOD_BROADCAST_PERIOD,
+                payload -> {
+                    long periodNs = Long.parseLong(payload);
+                    Log.i(TAG, "Received canonical period broadcast: " + periodNs + " ns");
+                    context.runOnUiThread(() -> phaseAlignController.setPeriodNs(periodNs));
+                });
+
+        sharedRpcs.put(
                 METHOD_SET_2A,
                 payload -> {
                     Log.v(TAG, "Received payload: " + payload);
@@ -174,7 +188,17 @@ public class SoftwareSyncController implements Closeable {
             long initTimeNs = TimeUtils.millisToNanos(System.currentTimeMillis());
             // Create rpc mapping specific to leader.
             Map<Integer, RpcCallback> leaderRpcs = new HashMap<>(sharedRpcs);
-            leaderRpcs.put(SyncConstants.METHOD_MSG_ADDED_CLIENT, payload -> updateClientsUI());
+            leaderRpcs.put(
+                    SyncConstants.METHOD_MSG_ADDED_CLIENT,
+                    payload -> {
+                        updateClientsUI();
+                        // Replay the last canonical period to a late-joining client.
+                        if (lastBroadcastPeriodNs != null && softwareSync instanceof SoftwareSyncLeader) {
+                            ((SoftwareSyncLeader) softwareSync)
+                                    .broadcastRpc(
+                                            METHOD_BROADCAST_PERIOD, String.valueOf(lastBroadcastPeriodNs));
+                        }
+                    });
             leaderRpcs.put(SyncConstants.METHOD_MSG_REMOVED_CLIENT, payload -> updateClientsUI());
             leaderRpcs.put(SyncConstants.METHOD_MSG_SYNCING, payload -> updateClientsUI());
             leaderRpcs.put(SyncConstants.METHOD_MSG_OFFSET_UPDATED, payload -> updateClientsUI());
@@ -304,6 +328,21 @@ public class SoftwareSyncController implements Closeable {
         return isLeader;
     }
 
+
+    /**
+     * Broadcasts the canonical SENSOR_FRAME_DURATION-derived period to all clients so every
+     * device's {@link PhaseAlignController} computes phase in the same modular arithmetic space.
+     * Stores the value so it can be replayed to late-joining clients via the MSG_ADDED_CLIENT
+     * hook above. No-op on clients.
+     */
+    public void broadcastCanonicalPeriod(long periodNs) {
+        lastBroadcastPeriodNs = periodNs;
+        if (isLeader && softwareSync instanceof SoftwareSyncLeader) {
+            Log.i(TAG, "Leader broadcasting canonical period: " + periodNs + " ns");
+            ((SoftwareSyncLeader) softwareSync)
+                    .broadcastRpc(METHOD_BROADCAST_PERIOD, String.valueOf(periodNs));
+        }
+    }
 
     // PATCH: collective reset
     /**
