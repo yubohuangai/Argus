@@ -41,6 +41,8 @@ import java.net.UnknownHostException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 // Note : Needs Network permissions.
 
@@ -77,6 +79,14 @@ public class SoftwareSyncController implements Closeable {
 
     /** Last canonical period broadcast by this leader, replayed to late-joining clients. */
     private Long lastBroadcastPeriodNs = null;
+
+    /**
+     * Single-thread executor for client→leader RPC sends. The phase alignment listener fires on
+     * the UI thread, and {@link SoftwareSyncClient#sendRpcToLeader} ultimately calls
+     * {@link java.net.DatagramSocket#send} which throws {@code NetworkOnMainThreadException} if
+     * invoked from the main thread. Hop here first.
+     */
+    private final ExecutorService rpcSendExecutor = Executors.newSingleThreadExecutor();
 
     /**
      * Per-device alignment status (display strings), keyed by device name. Populated on the
@@ -370,8 +380,16 @@ public class SoftwareSyncController implements Closeable {
             updateClientsUI();
         } else if (softwareSync instanceof SoftwareSyncClient) {
             String payload = String.format("%s,%s,%s", softwareSync.getName(), stateName, diffMs);
-            ((SoftwareSyncClient) softwareSync)
-                    .sendRpcToLeader(METHOD_REPORT_ALIGNMENT_STATUS, payload);
+            // Hop off the UI thread: DatagramSocket.send throws NetworkOnMainThreadException.
+            SoftwareSyncClient client = (SoftwareSyncClient) softwareSync;
+            rpcSendExecutor.execute(
+                    () -> {
+                        try {
+                            client.sendRpcToLeader(METHOD_REPORT_ALIGNMENT_STATUS, payload);
+                        } catch (Exception e) {
+                            Log.w(TAG, "Failed to send alignment status to leader", e);
+                        }
+                    });
         }
     }
 
@@ -396,6 +414,7 @@ public class SoftwareSyncController implements Closeable {
     @Override
     public void close() {
         Log.w(TAG, "close SoftwareSyncController");
+        rpcSendExecutor.shutdownNow();
         if (softwareSync != null) {
             try {
                 softwareSync.close();
