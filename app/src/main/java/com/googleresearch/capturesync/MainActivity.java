@@ -550,14 +550,15 @@ public class MainActivity extends Activity {
 
                             // --- Step 3: Post the final UI update back to the main thread ---
                             runOnUiThread(() -> {
-                                // This code will be executed on the UI thread.
+                                // PeriodCalculator is now a debug/comparison path only.
+                                // The canonical period comes from SENSOR_FRAME_DURATION via
+                                // onSensorPeriodReady(). Do NOT call phaseAlignController.setPeriodNs()
+                                // here — that would clobber the canonical value with a noisy estimate.
 
-                                phaseAlignController.setPeriodNs(periodNs);
-
-                                // Revert the button's appearance to the "finished" state
+                                // Show the measured value next to the (possibly different) canonical one.
                                 getPeriodButton.setEnabled(true);
                                 getPeriodButton.setTextColor(Color.parseColor("#006400"));
-                                getPeriodButton.setText("Period: " + periodNs + " ns");
+                                getPeriodButton.setText("Measured: " + periodNs + " ns (debug)");
                             });
 
                         } catch (InterruptedException e) {
@@ -1050,6 +1051,23 @@ public class MainActivity extends Activity {
                         prettyExposureValue(currentSensorExposureTimeNs),
                         currentSensorSensitivity));
         startPreview();
+    }
+
+    /**
+     * Called from {@link CameraController} once the {@link SensorPeriodTracker} has collected
+     * enough SENSOR_FRAME_DURATION samples to produce a stable canonical period. Replaces the
+     * noisy {@code PeriodCalculator}-derived value as the source of truth for phase alignment.
+     */
+    public void onSensorPeriodReady(long periodNs) {
+        Log.i(TAG, String.format("Sensor-reported canonical period: %d ns", periodNs));
+        runOnUiThread(() -> {
+            phaseAlignController.setPeriodNs(periodNs);
+            if (getPeriodButton != null) {
+                getPeriodButton.setTextColor(Color.parseColor("#006400"));
+                getPeriodButton.setText("Period: " + periodNs + " ns (sensor)");
+            }
+            // Leader-to-client broadcast of this canonical value is wired up in a follow-up commit.
+        });
     }
 
     void updatePhaseTextView(long phaseErrorNs) {

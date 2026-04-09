@@ -73,6 +73,8 @@ public class CameraController {
 
   private PeriodCalculator periodCalculator;
 
+  private final SensorPeriodTracker sensorPeriodTracker = new SensorPeriodTracker();
+
   private CaptureRequestFactory requestFactory;
 
   /**
@@ -144,8 +146,16 @@ public class CameraController {
                               unSyncTimestampNs);
 
               double timestampMs = TimeUtils.nanosToMillis((double) synchronizedTimestampNs);
+              Long frameDurationNs = result.get(CaptureResult.SENSOR_FRAME_DURATION);
               double frameDurationMs =
-                      TimeUtils.nanosToMillis((double) result.get(CaptureResult.SENSOR_FRAME_DURATION));
+                      frameDurationNs == null ? 0.0 : TimeUtils.nanosToMillis((double) frameDurationNs);
+
+              if (!sensorPeriodTracker.isStable()) {
+                sensorPeriodTracker.onFrameDuration(frameDurationNs);
+                if (sensorPeriodTracker.isStable()) {
+                  context.onSensorPeriodReady(sensorPeriodTracker.getStablePeriodNs());
+                }
+              }
 
               long phaseNs = phaseAlignController.updateCaptureTimestamp(synchronizedTimestampNs);
               double phaseMs = TimeUtils.nanosToMillis((double) phaseNs);
