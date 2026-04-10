@@ -58,7 +58,12 @@ jobs:
           java-version: '21'
 
       - name: Install unzip
-        run: nix-env -iA nixpkgs.unzip
+        run: |
+          command -v unzip && exit 0 || true
+          nix profile install --extra-experimental-features "nix-command flakes" nixpkgs#unzip 2>/dev/null && exit 0 || true
+          nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs 2>/dev/null || true
+          nix-channel --update nixpkgs
+          nix-env -iA nixpkgs.unzip
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
