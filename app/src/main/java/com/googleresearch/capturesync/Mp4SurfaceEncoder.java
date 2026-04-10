@@ -146,19 +146,23 @@ public final class Mp4SurfaceEncoder {
                                 if (csvLogger != null && !csvLogger.isClosed()) {
                                     // Poll full-precision leader-time timestamp from queue.
                                     Long leaderTsNs = timestampQueue.poll();
-                                    if (leaderTsNs == null) {
+                                    String line;
+                                    if (leaderTsNs != null) {
+                                        line = Long.toString(leaderTsNs);
+                                    } else {
                                         // Queue empty (HAL dropped a CaptureResult). Derive
-                                        // from presentationTimeUs: MONOTONIC → BOOTTIME →
-                                        // leader time. Microsecond precision only.
+                                        // from presentationTimeUs (µs precision only).
+                                        // Prefix with FALLBACK_ so it's obvious in CSV.
                                         long boottimeNs =
                                                 info.presentationTimeUs * 1000L + suspendOffsetNs;
-                                        leaderTsNs = timeDomainConverter
+                                        long fallback = timeDomainConverter
                                                 .leaderTimeForLocalTimeNs(boottimeNs);
+                                        line = "FALLBACK_" + fallback;
                                         Log.w(TAG, "Queue empty for muxed sample; "
-                                                + "using converter fallback (µs precision)");
+                                                + "wrote " + line);
                                     }
                                     try {
-                                        csvLogger.logLine(Long.toString(leaderTsNs));
+                                        csvLogger.logLine(line);
                                     } catch (IOException e) {
                                         Log.e(TAG, "CSV log failed", e);
                                     }
