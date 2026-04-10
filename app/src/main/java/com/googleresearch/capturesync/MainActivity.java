@@ -154,7 +154,19 @@ public class MainActivity extends Activity {
      */
     private final ConcurrentMap<Long, Long> videoCsvTimestampLookup = new ConcurrentHashMap<>();
 
+    /**
+     * CLOCK_BOOTTIME − CLOCK_MONOTONIC offset in nanoseconds, sampled once when video recording
+     * starts. SENSOR_TIMESTAMP uses BOOTTIME; the surface→encoder pipeline uses MONOTONIC.
+     * Subtracting this from SENSOR_TIMESTAMP yields the presentationTimeUs key the encoder reports.
+     */
+    private volatile long videoSuspendOffsetNs;
+
     private Mp4SurfaceEncoder mp4SurfaceEncoder;
+
+    /** Returns the suspend offset captured at recording start (for CameraController). */
+    public long getVideoSuspendOffsetNs() {
+        return videoSuspendOffsetNs;
+    }
 
     /**
      * Store a full-precision leader-time timestamp for a video frame, keyed by the microsecond
@@ -1332,6 +1344,9 @@ public class MainActivity extends Activity {
                 mp4SurfaceEncoder = new Mp4SurfaceEncoder();
             }
             videoCsvTimestampLookup.clear();
+            // Sample the BOOTTIME−MONOTONIC offset once (stable while screen is on).
+            videoSuspendOffsetNs =
+                    android.os.SystemClock.elapsedRealtimeNanos() - System.nanoTime();
             mp4SurfaceEncoder.startEncoding(
                     surface,
                     lastVideoPath,
@@ -1341,7 +1356,8 @@ public class MainActivity extends Activity {
                     frameRate,
                     mLogger,
                     videoCsvTimestampLookup,
-                    softwareSyncController.softwareSync);
+                    softwareSyncController.softwareSync,
+                    videoSuspendOffsetNs);
             encoderRunning = true;
             Log.d(TAG, "Mp4SurfaceEncoder started for " + lastVideoPath);
             CaptureRequest.Builder previewRequestBuilder =

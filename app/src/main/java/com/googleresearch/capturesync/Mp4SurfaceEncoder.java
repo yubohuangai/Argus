@@ -62,7 +62,8 @@ public final class Mp4SurfaceEncoder {
             int frameRate,
             CSVLogger csvLogger,
             ConcurrentMap<Long, Long> timestampLookup,
-            TimeDomainConverter timeDomainConverter)
+            TimeDomainConverter timeDomainConverter,
+            long suspendOffsetNs)
             throws InterruptedException, IOException {
         CountDownLatch started = new CountDownLatch(1);
         IOException[] holder = new IOException[1];
@@ -78,7 +79,8 @@ public final class Mp4SurfaceEncoder {
                                 frameRate,
                                 csvLogger,
                                 timestampLookup,
-                                timeDomainConverter);
+                                timeDomainConverter,
+                                suspendOffsetNs);
                     } catch (IOException e) {
                         holder[0] = e;
                     } finally {
@@ -102,7 +104,8 @@ public final class Mp4SurfaceEncoder {
             int frameRate,
             CSVLogger csvLogger,
             ConcurrentMap<Long, Long> timestampLookup,
-            TimeDomainConverter timeDomainConverter)
+            TimeDomainConverter timeDomainConverter,
+            long suspendOffsetNs)
             throws IOException {
         resourcesReleased.set(false);
         muxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -147,9 +150,12 @@ public final class Mp4SurfaceEncoder {
                                     Long leaderTsNs = timestampLookup.remove(
                                             info.presentationTimeUs);
                                     if (leaderTsNs == null) {
-                                        long localNs = info.presentationTimeUs * 1000L;
+                                        // presentationTimeUs is MONOTONIC; converter expects
+                                        // BOOTTIME. Add the suspend offset back.
+                                        long boottimeNs =
+                                                info.presentationTimeUs * 1000L + suspendOffsetNs;
                                         leaderTsNs = timeDomainConverter
-                                                .leaderTimeForLocalTimeNs(localNs);
+                                                .leaderTimeForLocalTimeNs(boottimeNs);
                                         Log.d(TAG, "Lookup miss for ptsUs="
                                                 + info.presentationTimeUs
                                                 + "; map size=" + timestampLookup.size()
