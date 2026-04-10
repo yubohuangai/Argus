@@ -169,7 +169,12 @@ public class CameraController {
               // value the encoder will see (sensorTimestamp truncated to microseconds).
               if (context.getLastVideoSeqId() != null
                       && context.getLastVideoSeqId() == sequenceId) {
-                  long presentationTimeUs = unSyncTimestampNs / 1000L;
+                  // SENSOR_TIMESTAMP uses CLOCK_BOOTTIME (includes suspend), but the
+                  // surface→encoder pipeline reports presentationTimeUs in CLOCK_MONOTONIC.
+                  // Convert by subtracting the accumulated suspend time.
+                  long suspendOffsetNs =
+                          android.os.SystemClock.elapsedRealtimeNanos() - System.nanoTime();
+                  long presentationTimeUs = (unSyncTimestampNs - suspendOffsetNs) / 1000L;
                   context.offerVideoCsvTimestamp(presentationTimeUs, synchronizedTimestampNs);
               }
               if (shouldSaveFrame(synchronizedTimestampNs)) {
