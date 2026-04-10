@@ -17,19 +17,20 @@ import android.util.Log;
 import android.view.Surface;
 
 import com.googleresearch.capturesync.softwaresync.CSVLogger;
-import com.googleresearch.capturesync.softwaresync.TimeDomainConverter;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * H.264 encoder + MP4 muxer using a persistent input {@link Surface}. Writes one CSV line per muxed
- * video sample using the muxer's own {@code BufferInfo.presentationTimeUs}, which Camera2 forwards
- * from the sensor timestamp through the input surface. This guarantees {@code csv_count ==
- * frame_count} by construction (one loop produces both).
+ * video sample by looking up the full-precision leader-time timestamp from a
+ * {@link ConcurrentMap} keyed by {@code presentationTimeUs}. The map is populated from the Camera2
+ * capture callback; the encoder consumes entries here. Because the CSV row is written in the same
+ * callback that muxes the frame, {@code csv_count == frame_count} is guaranteed by construction.
  */
 public final class Mp4SurfaceEncoder {
     private static final String TAG = "Mp4SurfaceEncoder";
@@ -59,7 +60,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            TimeDomainConverter timeDomainConverter)
+            ConcurrentMap<Long, Long> timestampLookup)
             throws InterruptedException, IOException {
         CountDownLatch started = new CountDownLatch(1);
         IOException[] holder = new IOException[1];
@@ -74,7 +75,7 @@ public final class Mp4SurfaceEncoder {
                                 bitRate,
                                 frameRate,
                                 csvLogger,
-                                timeDomainConverter);
+                                timestampLookup);
                     } catch (IOException e) {
                         holder[0] = e;
                     } finally {
@@ -97,7 +98,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            TimeDomainConverter timeDomainConverter)
+            ConcurrentMap<Long, Long> timestampLookup)
             throws IOException {
         resourcesReleased.set(false);
         muxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -137,19 +138,20 @@ public final class Mp4SurfaceEncoder {
                                     muxer.writeSampleData(videoTrackIndex, encoded, info);
                                 }
                                 if (csvLogger != null && !csvLogger.isClosed()) {
-                                    // Camera2 forwards SENSOR_TIMESTAMP (ns) through the input
-                                    // surface as presentationTimeUs (us, truncated). Convert back
-                                    // to ns and into the leader time domain so the CSV row is
-                                    // produced from the same loop that muxes the frame, making
-                                    // csv_count == frame_count guaranteed.
-                                    long localSensorTimestampNs = info.presentationTimeUs * 1000L;
-                                    long leaderTsNs =
-                                            timeDomainConverter.leaderTimeForLocalTimeNs(
-                                                    localSensorTimestampNs);
-                                    try {
-                                        csvLogger.logLine(Long.toString(leaderTsNs));
-                                    } catch (IOException e) {
-                                        Log.e(TAG, "CSV log failed", e);
+                                    // Look up the full-precision leader-time timestamp that
+                                    // CameraController stored keyed by presentationTimeUs.
+                                    Long leaderTsNs = timestampLookup.remove(
+                                            info.presentationTimeUs);
+                                    if (leaderTsNs != null) {
+                                        try {
+                                            csvLogger.logLine(Long.toString(leaderTsNs));
+                                        } catch (IOException e) {
+                                            Log.e(TAG, "CSV log failed", e);
+                                        }
+                                    } else {
+                                        Log.w(TAG, "No timestamp in lookup for presentationTimeUs="
+                                                + info.presentationTimeUs
+                                                + "; CSV line skipped");
                                     }
                                 }
                             }

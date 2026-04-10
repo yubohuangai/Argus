@@ -90,6 +90,8 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.FutureTask;
 import java.util.stream.Collectors;
 
@@ -144,7 +146,24 @@ public class MainActivity extends Activity {
         lastVideoSeqId = null;
     }
 
+    /**
+     * Keyed lookup for full-precision leader-time timestamps. CameraController stores entries
+     * keyed by {@code sensorTimestampNs / 1000} (== the presentationTimeUs the encoder will see).
+     * Mp4SurfaceEncoder removes entries as it muxes frames. This replaces the old FIFO queue:
+     * the key ties the two pipelines together so they can never desync.
+     */
+    private final ConcurrentMap<Long, Long> videoCsvTimestampLookup = new ConcurrentHashMap<>();
+
     private Mp4SurfaceEncoder mp4SurfaceEncoder;
+
+    /**
+     * Store a full-precision leader-time timestamp for a video frame, keyed by the microsecond
+     * value the encoder will see as {@code presentationTimeUs}. Called from CameraController's
+     * capture callback for every frame belonging to the active video sequence.
+     */
+    public void offerVideoCsvTimestamp(long presentationTimeUs, long leaderTimestampNs) {
+        videoCsvTimestampLookup.put(presentationTimeUs, leaderTimestampNs);
+    }
 
     /**
      * Stops muxer/codec after the capture sequence ends (same point MediaRecorder.stop() ran).
@@ -173,6 +192,7 @@ public class MainActivity extends Activity {
                         }
                         setLogger(null);
                         clearVideoRecordingSequenceId();
+                        videoCsvTimestampLookup.clear();
                     });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1311,6 +1331,7 @@ public class MainActivity extends Activity {
             if (mp4SurfaceEncoder == null) {
                 mp4SurfaceEncoder = new Mp4SurfaceEncoder();
             }
+            videoCsvTimestampLookup.clear();
             mp4SurfaceEncoder.startEncoding(
                     surface,
                     lastVideoPath,
@@ -1319,7 +1340,7 @@ public class MainActivity extends Activity {
                     bitRate,
                     frameRate,
                     mLogger,
-                    softwareSyncController.softwareSync);
+                    videoCsvTimestampLookup);
             encoderRunning = true;
             Log.d(TAG, "Mp4SurfaceEncoder started for " + lastVideoPath);
             CaptureRequest.Builder previewRequestBuilder =
