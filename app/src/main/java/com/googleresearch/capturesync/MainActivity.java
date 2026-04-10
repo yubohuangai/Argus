@@ -1340,7 +1340,8 @@ public class MainActivity extends Activity {
                     bitRate,
                     frameRate,
                     mLogger,
-                    videoCsvTimestampLookup);
+                    videoCsvTimestampLookup,
+                    softwareSyncController.softwareSync);
             encoderRunning = true;
             Log.d(TAG, "Mp4SurfaceEncoder started for " + lastVideoPath);
             CaptureRequest.Builder previewRequestBuilder =

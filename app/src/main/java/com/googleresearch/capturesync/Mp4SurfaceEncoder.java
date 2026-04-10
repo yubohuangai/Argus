@@ -17,6 +17,7 @@ import android.util.Log;
 import android.view.Surface;
 
 import com.googleresearch.capturesync.softwaresync.CSVLogger;
+import com.googleresearch.capturesync.softwaresync.TimeDomainConverter;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -60,7 +61,8 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            ConcurrentMap<Long, Long> timestampLookup)
+            ConcurrentMap<Long, Long> timestampLookup,
+            TimeDomainConverter timeDomainConverter)
             throws InterruptedException, IOException {
         CountDownLatch started = new CountDownLatch(1);
         IOException[] holder = new IOException[1];
@@ -75,7 +77,8 @@ public final class Mp4SurfaceEncoder {
                                 bitRate,
                                 frameRate,
                                 csvLogger,
-                                timestampLookup);
+                                timestampLookup,
+                                timeDomainConverter);
                     } catch (IOException e) {
                         holder[0] = e;
                     } finally {
@@ -98,7 +101,8 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            ConcurrentMap<Long, Long> timestampLookup)
+            ConcurrentMap<Long, Long> timestampLookup,
+            TimeDomainConverter timeDomainConverter)
             throws IOException {
         resourcesReleased.set(false);
         muxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -138,20 +142,23 @@ public final class Mp4SurfaceEncoder {
                                     muxer.writeSampleData(videoTrackIndex, encoded, info);
                                 }
                                 if (csvLogger != null && !csvLogger.isClosed()) {
-                                    // Look up the full-precision leader-time timestamp that
-                                    // CameraController stored keyed by presentationTimeUs.
+                                    // Try full-precision lookup first; fall back to
+                                    // presentationTimeUs conversion (µs precision).
                                     Long leaderTsNs = timestampLookup.remove(
                                             info.presentationTimeUs);
-                                    if (leaderTsNs != null) {
-                                        try {
-                                            csvLogger.logLine(Long.toString(leaderTsNs));
-                                        } catch (IOException e) {
-                                            Log.e(TAG, "CSV log failed", e);
-                                        }
-                                    } else {
-                                        Log.w(TAG, "No timestamp in lookup for presentationTimeUs="
+                                    if (leaderTsNs == null) {
+                                        long localNs = info.presentationTimeUs * 1000L;
+                                        leaderTsNs = timeDomainConverter
+                                                .leaderTimeForLocalTimeNs(localNs);
+                                        Log.d(TAG, "Lookup miss for ptsUs="
                                                 + info.presentationTimeUs
-                                                + "; CSV line skipped");
+                                                + "; map size=" + timestampLookup.size()
+                                                + "; using converter fallback");
+                                    }
+                                    try {
+                                        csvLogger.logLine(Long.toString(leaderTsNs));
+                                    } catch (IOException e) {
+                                        Log.e(TAG, "CSV log failed", e);
                                     }
                                 }
                             }
