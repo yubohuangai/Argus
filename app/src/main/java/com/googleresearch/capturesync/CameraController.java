@@ -169,12 +169,7 @@ public class CameraController {
               // value the encoder will see (sensorTimestamp truncated to microseconds).
               if (context.getLastVideoSeqId() != null
                       && context.getLastVideoSeqId() == sequenceId) {
-                  // SENSOR_TIMESTAMP uses CLOCK_BOOTTIME; the encoder reports
-                  // presentationTimeUs in CLOCK_MONOTONIC. Use the offset sampled once
-                  // at recording start (stable while screen is on, avoids per-frame jitter).
-                  long presentationTimeUs =
-                          (unSyncTimestampNs - context.getVideoSuspendOffsetNs()) / 1000L;
-                  context.offerVideoCsvTimestamp(presentationTimeUs, synchronizedTimestampNs);
+                  context.offerVideoCsvTimestamp(synchronizedTimestampNs);
               }
               if (shouldSaveFrame(synchronizedTimestampNs)) {
                 Log.d(TAG, "Sync frame found! Committing and processing");

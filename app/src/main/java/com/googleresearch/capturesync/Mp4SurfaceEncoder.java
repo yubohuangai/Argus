@@ -21,17 +21,16 @@ import com.googleresearch.capturesync.softwaresync.TimeDomainConverter;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.ConcurrentMap;
+import java.util.Queue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * H.264 encoder + MP4 muxer using a persistent input {@link Surface}. Writes one CSV line per muxed
- * video sample by looking up the full-precision leader-time timestamp from a
- * {@link ConcurrentMap} keyed by {@code presentationTimeUs}. The map is populated from the Camera2
- * capture callback; the encoder consumes entries here. Because the CSV row is written in the same
- * callback that muxes the frame, {@code csv_count == frame_count} is guaranteed by construction.
+ * video sample. Full-precision leader-time timestamps are polled from an ordered queue populated by
+ * the Camera2 capture callback. If the queue is empty (rare HAL drop), a fallback derived from
+ * {@code presentationTimeUs} is used so that {@code csv_count == frame_count} is always guaranteed.
  */
 public final class Mp4SurfaceEncoder {
     private static final String TAG = "Mp4SurfaceEncoder";
@@ -61,7 +60,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            ConcurrentMap<Long, Long> timestampLookup,
+            Queue<Long> timestampQueue,
             TimeDomainConverter timeDomainConverter,
             long suspendOffsetNs)
             throws InterruptedException, IOException {
@@ -78,7 +77,7 @@ public final class Mp4SurfaceEncoder {
                                 bitRate,
                                 frameRate,
                                 csvLogger,
-                                timestampLookup,
+                                timestampQueue,
                                 timeDomainConverter,
                                 suspendOffsetNs);
                     } catch (IOException e) {
@@ -103,7 +102,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            ConcurrentMap<Long, Long> timestampLookup,
+            Queue<Long> timestampQueue,
             TimeDomainConverter timeDomainConverter,
             long suspendOffsetNs)
             throws IOException {
@@ -145,21 +144,18 @@ public final class Mp4SurfaceEncoder {
                                     muxer.writeSampleData(videoTrackIndex, encoded, info);
                                 }
                                 if (csvLogger != null && !csvLogger.isClosed()) {
-                                    // Try full-precision lookup first; fall back to
-                                    // presentationTimeUs conversion (µs precision).
-                                    Long leaderTsNs = timestampLookup.remove(
-                                            info.presentationTimeUs);
+                                    // Poll full-precision leader-time timestamp from queue.
+                                    Long leaderTsNs = timestampQueue.poll();
                                     if (leaderTsNs == null) {
-                                        // presentationTimeUs is MONOTONIC; converter expects
-                                        // BOOTTIME. Add the suspend offset back.
+                                        // Queue empty (HAL dropped a CaptureResult). Derive
+                                        // from presentationTimeUs: MONOTONIC → BOOTTIME →
+                                        // leader time. Microsecond precision only.
                                         long boottimeNs =
                                                 info.presentationTimeUs * 1000L + suspendOffsetNs;
                                         leaderTsNs = timeDomainConverter
                                                 .leaderTimeForLocalTimeNs(boottimeNs);
-                                        Log.d(TAG, "Lookup miss for ptsUs="
-                                                + info.presentationTimeUs
-                                                + "; map size=" + timestampLookup.size()
-                                                + "; using converter fallback");
+                                        Log.w(TAG, "Queue empty for muxed sample; "
+                                                + "using converter fallback (µs precision)");
                                     }
                                     try {
                                         csvLogger.logLine(Long.toString(leaderTsNs));

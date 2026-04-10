@@ -90,8 +90,8 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.FutureTask;
 import java.util.stream.Collectors;
 
@@ -147,12 +147,12 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Keyed lookup for full-precision leader-time timestamps. CameraController stores entries
-     * keyed by {@code sensorTimestampNs / 1000} (== the presentationTimeUs the encoder will see).
-     * Mp4SurfaceEncoder removes entries as it muxes frames. This replaces the old FIFO queue:
-     * the key ties the two pipelines together so they can never desync.
+     * Ordered queue of full-precision leader-time timestamps. CameraController offers one entry per
+     * video frame; Mp4SurfaceEncoder polls one per muxed sample. Both pipelines process frames in
+     * order, so the FIFO pairing is correct. If the queue is ever empty (HAL dropped a
+     * CaptureResult), the encoder falls back to a converter-derived timestamp.
      */
-    private final ConcurrentMap<Long, Long> videoCsvTimestampLookup = new ConcurrentHashMap<>();
+    private final Queue<Long> videoCsvTimestampQueue = new ConcurrentLinkedQueue<>();
 
     /**
      * CLOCK_BOOTTIME − CLOCK_MONOTONIC offset in nanoseconds, sampled once when video recording
@@ -169,12 +169,11 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Store a full-precision leader-time timestamp for a video frame, keyed by the microsecond
-     * value the encoder will see as {@code presentationTimeUs}. Called from CameraController's
-     * capture callback for every frame belonging to the active video sequence.
+     * Enqueue a full-precision leader-time timestamp for the next muxed video frame.
+     * Called from CameraController's capture callback for every frame in the active video sequence.
      */
-    public void offerVideoCsvTimestamp(long presentationTimeUs, long leaderTimestampNs) {
-        videoCsvTimestampLookup.put(presentationTimeUs, leaderTimestampNs);
+    public void offerVideoCsvTimestamp(long leaderTimestampNs) {
+        videoCsvTimestampQueue.offer(leaderTimestampNs);
     }
 
     /**
@@ -204,7 +203,7 @@ public class MainActivity extends Activity {
                         }
                         setLogger(null);
                         clearVideoRecordingSequenceId();
-                        videoCsvTimestampLookup.clear();
+                        videoCsvTimestampQueue.clear();
                     });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1343,7 +1342,7 @@ public class MainActivity extends Activity {
             if (mp4SurfaceEncoder == null) {
                 mp4SurfaceEncoder = new Mp4SurfaceEncoder();
             }
-            videoCsvTimestampLookup.clear();
+            videoCsvTimestampQueue.clear();
             // Sample the BOOTTIME−MONOTONIC offset once (stable while screen is on).
             videoSuspendOffsetNs =
                     android.os.SystemClock.elapsedRealtimeNanos() - System.nanoTime();
@@ -1355,7 +1354,7 @@ public class MainActivity extends Activity {
                     bitRate,
                     frameRate,
                     mLogger,
-                    videoCsvTimestampLookup,
+                    videoCsvTimestampQueue,
                     softwareSyncController.softwareSync,
                     videoSuspendOffsetNs);
             encoderRunning = true;
