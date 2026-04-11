@@ -17,20 +17,18 @@ import android.util.Log;
 import android.view.Surface;
 
 import com.googleresearch.capturesync.softwaresync.CSVLogger;
-import com.googleresearch.capturesync.softwaresync.TimeDomainConverter;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Queue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * H.264 encoder + MP4 muxer using a persistent input {@link Surface}. Writes one CSV line per muxed
- * video sample. Full-precision leader-time timestamps are polled from an ordered queue populated by
- * the Camera2 capture callback. If the queue is empty (rare HAL drop), a fallback derived from
- * {@code presentationTimeUs} is used so that {@code csv_count == frame_count} is always guaranteed.
+ * video sample by FIFO-pairing with timestamps offered from Camera2 ({@link
+ * MainActivity#offerVideoCsvTimestamp}).
  */
 public final class Mp4SurfaceEncoder {
     private static final String TAG = "Mp4SurfaceEncoder";
@@ -60,9 +58,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            Queue<Long> timestampQueue,
-            TimeDomainConverter timeDomainConverter,
-            long suspendOffsetNs)
+            BlockingQueue<Long> timestampQueue)
             throws InterruptedException, IOException {
         CountDownLatch started = new CountDownLatch(1);
         IOException[] holder = new IOException[1];
@@ -77,9 +73,7 @@ public final class Mp4SurfaceEncoder {
                                 bitRate,
                                 frameRate,
                                 csvLogger,
-                                timestampQueue,
-                                timeDomainConverter,
-                                suspendOffsetNs);
+                                timestampQueue);
                     } catch (IOException e) {
                         holder[0] = e;
                     } finally {
@@ -102,9 +96,7 @@ public final class Mp4SurfaceEncoder {
             int bitRate,
             int frameRate,
             CSVLogger csvLogger,
-            Queue<Long> timestampQueue,
-            TimeDomainConverter timeDomainConverter,
-            long suspendOffsetNs)
+            BlockingQueue<Long> timestampQueue)
             throws IOException {
         resourcesReleased.set(false);
         muxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
@@ -143,29 +135,19 @@ public final class Mp4SurfaceEncoder {
                                     encoded.limit(info.offset + info.size);
                                     muxer.writeSampleData(videoTrackIndex, encoded, info);
                                 }
-                                if (csvLogger != null && !csvLogger.isClosed()) {
-                                    // Poll full-precision leader-time timestamp from queue.
-                                    Long leaderTsNs = timestampQueue.poll();
-                                    String line;
-                                    if (leaderTsNs != null) {
-                                        line = Long.toString(leaderTsNs);
-                                    } else {
-                                        // Queue empty (HAL dropped a CaptureResult). Derive
-                                        // from presentationTimeUs (µs precision only).
-                                        // Prefix with FALLBACK_ so it's obvious in CSV.
-                                        long boottimeNs =
-                                                info.presentationTimeUs * 1000L + suspendOffsetNs;
-                                        long fallback = timeDomainConverter
-                                                .leaderTimeForLocalTimeNs(boottimeNs);
-                                        line = "FALLBACK_" + fallback;
-                                        Log.w(TAG, "Queue empty for muxed sample; "
-                                                + "wrote " + line);
-                                    }
+                                Long leaderTsNs = timestampQueue.poll();
+                                if (leaderTsNs != null
+                                        && csvLogger != null
+                                        && !csvLogger.isClosed()) {
                                     try {
-                                        csvLogger.logLine(line);
+                                        csvLogger.logLine(Long.toString(leaderTsNs));
                                     } catch (IOException e) {
                                         Log.e(TAG, "CSV log failed", e);
                                     }
+                                } else if (leaderTsNs == null) {
+                                    Log.w(
+                                            TAG,
+                                            "No camera timestamp for muxed sample (empty queue); CSV line skipped");
                                 }
                             }
                         } catch (Exception e) {

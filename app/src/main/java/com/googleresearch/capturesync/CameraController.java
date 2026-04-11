@@ -165,11 +165,13 @@ public class CameraController {
                               "onCaptureCompleted: timestampMs = %,.3f, frameDurationMs = %,.6f, phase ="
                                       + " %,.3f, sequence id = %d",
                               timestampMs, frameDurationMs, phaseMs, sequenceId));
-              // Store full-precision leader-time timestamp keyed by the presentationTimeUs
-              // value the encoder will see (sensorTimestamp truncated to microseconds).
-              if (context.getLastVideoSeqId() != null
-                      && context.getLastVideoSeqId() == sequenceId) {
-                  context.offerVideoCsvTimestamp(synchronizedTimestampNs);
+              synchronized (this) {
+                if (context.getLogger() != null
+                        && !context.getLogger().isClosed()
+                        && context.getLastVideoSeqId() != null
+                        && context.getLastVideoSeqId() == sequenceId) {
+                  context.offerVideoCsvTimestamp(synchronizedTimestampNs, unSyncTimestampNs);
+                }
               }
               if (shouldSaveFrame(synchronizedTimestampNs)) {
                 Log.d(TAG, "Sync frame found! Committing and processing");

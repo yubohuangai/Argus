@@ -90,8 +90,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.FutureTask;
 import java.util.stream.Collectors;
 
@@ -146,34 +145,33 @@ public class MainActivity extends Activity {
         lastVideoSeqId = null;
     }
 
-    /**
-     * Ordered queue of full-precision leader-time timestamps. CameraController offers one entry per
-     * video frame; Mp4SurfaceEncoder polls one per muxed sample. Both pipelines process frames in
-     * order, so the FIFO pairing is correct. If the queue is ever empty (HAL dropped a
-     * CaptureResult), the encoder falls back to a converter-derived timestamp.
-     */
-    private final Queue<Long> videoCsvTimestampQueue = new ConcurrentLinkedQueue<>();
+    /** FIFO timestamps to pair with muxed encoder output (one CSV line per muxed sample). */
+    private final LinkedBlockingQueue<Long> videoCsvTimestampQueue = new LinkedBlockingQueue<>();
 
-    /**
-     * CLOCK_BOOTTIME − CLOCK_MONOTONIC offset in nanoseconds, sampled once when video recording
-     * starts. SENSOR_TIMESTAMP uses BOOTTIME; the surface→encoder pipeline uses MONOTONIC.
-     * Subtracting this from SENSOR_TIMESTAMP yields the presentationTimeUs key the encoder reports.
-     */
-    private volatile long videoSuspendOffsetNs;
+    private long lastVideoCsvSensorTimestampNs = Long.MIN_VALUE;
 
     private Mp4SurfaceEncoder mp4SurfaceEncoder;
 
-    /** Returns the suspend offset captured at recording start (for CameraController). */
-    public long getVideoSuspendOffsetNs() {
-        return videoSuspendOffsetNs;
+    /**
+     * Enqueue a leader-time timestamp for the next muxed video frame. CSV is written from the
+     * encoder callback, not here, so line count matches muxed samples.
+     */
+    public void offerVideoCsvTimestamp(long synchronizedTimestampNs, long unSyncTimestampNs) {
+        if (mLogger == null || mLogger.isClosed() || lastVideoSeqId == null) {
+            return;
+        }
+        if (!tryAcceptVideoCsvTimestamp(unSyncTimestampNs)) {
+            return;
+        }
+        videoCsvTimestampQueue.offer(synchronizedTimestampNs);
     }
 
-    /**
-     * Enqueue a full-precision leader-time timestamp for the next muxed video frame.
-     * Called from CameraController's capture callback for every frame in the active video sequence.
-     */
-    public void offerVideoCsvTimestamp(long leaderTimestampNs) {
-        videoCsvTimestampQueue.offer(leaderTimestampNs);
+    public boolean tryAcceptVideoCsvTimestamp(long sensorTimestampNs) {
+        if (sensorTimestampNs == lastVideoCsvSensorTimestampNs) {
+            return false;
+        }
+        lastVideoCsvSensorTimestampNs = sensorTimestampNs;
+        return true;
     }
 
     /**
@@ -189,6 +187,7 @@ public class MainActivity extends Activity {
                 }
                 setLogger(null);
                 clearVideoRecordingSequenceId();
+                videoCsvTimestampQueue.clear();
                 return;
             }
             mp4SurfaceEncoder.stopAndRelease(
@@ -203,6 +202,14 @@ public class MainActivity extends Activity {
                         }
                         setLogger(null);
                         clearVideoRecordingSequenceId();
+                        int leftover = videoCsvTimestampQueue.size();
+                        if (leftover > 0) {
+                            Log.w(
+                                    TAG,
+                                    leftover
+                                            + " camera timestamps had no muxed sample (encoder"
+                                            + " drops); CSV lines match MP4 frames only");
+                        }
                         videoCsvTimestampQueue.clear();
                     });
         } catch (InterruptedException e) {
@@ -1322,6 +1329,7 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Started recording video", Toast.LENGTH_LONG).show();
 
         lastVideoSeqId = null;
+        lastVideoCsvSensorTimestampNs = Long.MIN_VALUE;
         isVideoRecording = true;
         boolean encoderRunning = false;
         try {
@@ -1343,9 +1351,6 @@ public class MainActivity extends Activity {
                 mp4SurfaceEncoder = new Mp4SurfaceEncoder();
             }
             videoCsvTimestampQueue.clear();
-            // Sample the BOOTTIME−MONOTONIC offset once (stable while screen is on).
-            videoSuspendOffsetNs =
-                    android.os.SystemClock.elapsedRealtimeNanos() - System.nanoTime();
             mp4SurfaceEncoder.startEncoding(
                     surface,
                     lastVideoPath,
@@ -1354,9 +1359,7 @@ public class MainActivity extends Activity {
                     bitRate,
                     frameRate,
                     mLogger,
-                    videoCsvTimestampQueue,
-                    softwareSyncController.softwareSync,
-                    videoSuspendOffsetNs);
+                    videoCsvTimestampQueue);
             encoderRunning = true;
             Log.d(TAG, "Mp4SurfaceEncoder started for " + lastVideoPath);
             CaptureRequest.Builder previewRequestBuilder =
