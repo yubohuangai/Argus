@@ -10,7 +10,7 @@ RecSync is an Android research application that enables **sub-millisecond synchr
 
 The system runs on a local WiFi hotspot with no internet dependency. One phone acts as the **leader** (the hotspot host), and all others are **clients**. Synchronization is achieved in three layers:
 
-1. **Clock Synchronization** (SNTP) — aligns wall-clock time across devices
+1. **Clock Synchronization** (SNTP) — aligns each device's monotonic elapsed time into a shared leader time domain
 2. **Phase Alignment** — aligns the *moment within each frame period* when shutters fire
 3. **Coordinated Recording** — starts/stops video capture atomically across the fleet
 
@@ -127,7 +127,7 @@ Message format (RPC port): **4-byte big-endian method ID** + **variable-length U
 
 ### 4.1 Clock Domain
 
-All devices measure time using `SystemClock.elapsedRealtimeNanos()` — a monotonic clock counting nanoseconds since boot, unaffected by wall-clock adjustments.
+All devices measure time using `SystemClock.elapsedRealtimeNanos()` — a monotonic clock counting nanoseconds since boot. Unlike the system real-time clock (which can jump due to NTP or user changes), this clock only moves forward and is never adjusted, making it safe for interval measurement.
 
 ### 4.2 Protocol (Naive PTP)
 
@@ -137,15 +137,46 @@ The SNTP exchange is a 4-timestamp round-trip:
 Leader                          Client
   |                               |
   |--- t0 (leader sends) ------->|
-  |                               | t0' = client receive time
-  |                               | t1  = client send time
-  |<-- [t0, t0', t1] ------------|
+  |                               | t1 = client receive time
+  |                               | t2 = client send time
+  |<-- [t0, t1, t2] -------------|
   |                               |
   t3 = leader receive time
 ```
 
-**Clock offset** = `((t0' - t0) + (t1 - t3)) / 2`
-**Round-trip latency** = `(t3 - t0) - (t1 - t0')`
+**Clock offset** = `((t1 - t0) + (t2 - t3)) / 2`
+**Round-trip latency** = `(t3 - t0) - (t2 - t1)`
+
+#### Derivation of the clock offset formula
+
+Define **θ** as the clock offset (client time − leader time at the same physical instant), **d₁** as the propagation delay leader→client, and **d₂** as the propagation delay client→leader.
+
+From the two legs:
+
+```
+Leader→client:  t1 = t0 + d₁ + θ   →   t1 - t0 = d₁ + θ        … (i)
+Client→leader:  t3 = (t2 - θ) + d₂  →   t2 - t3 = θ - d₂        … (ii)
+```
+
+Adding (i) and (ii) and dividing by 2:
+
+```
+θ = [(t1 - t0) + (t2 - t3)] / 2   −   (d₁ - d₂) / 2
+                                        ──────────────
+                                          residual error
+```
+
+The formula is **not** assuming zero latency — it assumes **symmetric** latency (d₁ = d₂). When the two directions take the same time the residual error term vanishes and the formula is exact regardless of how large the latency actually is. When paths are asymmetric, the irreducible error is `(d₁ − d₂) / 2` — unavoidable in software-only time sync.
+
+The round-trip latency formula subtracts the client hold time `(t2 - t1)` from the total elapsed time `(t3 - t0)`, leaving only the two network transit times:
+
+```
+(t3 - t0) - (t2 - t1) = (t1 - t0) + (t3 - t2) = d₁ + d₂
+```
+
+#### Why the min-filter helps
+
+Selecting the cycle with the **minimum round-trip** `(d₁ + d₂)` is a proxy for the cycle where both legs were short and therefore most likely equal. It does not eliminate asymmetry error but minimises it in practice.
 
 The leader runs up to **300 cycles** and selects the measurement with the **minimum round-trip latency** (min-filter), stopping early if latency drops below **1 ms**. The resulting offset is sent to the client via `METHOD_OFFSET_UPDATE`.
 
