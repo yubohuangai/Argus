@@ -148,4 +148,4 @@ One practical pipeline (outside this repo) is:
 3. Create a quick stitched multi-view visualization for sanity checking:
    - Script: `C:\Users\yuboh\GitHub\Motion-Capture\scripts\preprocess\synctest\stitch.py`
 
-In the 11-phone setup, this visualization sometimes shows pairwise synchronization errors around **20–50 ms**, which is higher than expected. We need to find a better synchronization method.
+In the 11-phone setup, the original codebase showed pairwise synchronization errors around **20–50 ms** in this visualization. After the `fix-sync-accuracy` work landed on `master`, validation across **11 Pixel 7** devices showed the **maximum** observed inter-device timestamp difference stayed **below 17 ms** at **9-minute** recording length. See [REPORT.md](REPORT.md) section 8 for the root-cause analysis and the fixes that produced this result.
