@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-RecSync is an Android research application that enables **sub-millisecond synchronized video recording** across multiple smartphones (tested with up to 11 Pixel phones). Each device simultaneously records H.264 MP4 video with a companion CSV file containing per-frame timestamps in a shared clock domain, enabling frame-accurate post-processing alignment for motion capture and multi-view 3D reconstruction.
+RecSync is an Android research application that enables **tight synchronized video recording** across multiple smartphones (tested with up to 11 Pixel phones). Each device simultaneously records H.264 MP4 video with a companion CSV file containing per-frame timestamps in a shared clock domain, enabling frame-accurate post-processing alignment for motion capture and multi-view 3D reconstruction.
 
 The system runs on a local WiFi hotspot with no internet dependency. One phone acts as the **leader** (the hotspot host), and all others are **clients**. Synchronization is achieved in three layers:
 
@@ -371,10 +371,12 @@ Camera sensors report `SENSOR_TIMESTAMP` in `CLOCK_BOOTTIME` (includes device su
 
 | Metric | Before | After |
 |--------|--------|-------|
-| Cross-phone sync | Bimodal: 6 good, 4 off by 8-14 ms | All phones in same modular space |
+| Cross-phone sync | Bimodal: 6 good, 4 off by 8-14 ms | 11-phone validation on `fix-sync-accuracy`: max observed inter-device time diff < 17 ms at 9-minute recording length |
 | CSV/frame count match | Occasional mismatches under 4K | Guaranteed by construction |
 | Alignment visibility | Check each phone screen | Leader shows all device statuses |
 | Period measurement noise | +/- 5,166 ns between runs | Stable 33,333,333 ns (from sensor API) |
+
+This branch demonstrably improves stability at longer capture durations: for 11 Pixel 7 devices, the maximum observed timestamp difference across recordings remains below 17 ms at 9 minutes.
 
 ### 8.4 Known Limitation
 
