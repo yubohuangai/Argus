@@ -91,6 +91,34 @@ Grant **storage** access as required by your Android version; paths assume tradi
 
 ---
 
+## Building and installing from the command line
+
+These commands replace the Android Studio "Run" and "Build > Generate APK" workflows. Run them from the repo root.
+
+### Build and install on the connected phone
+
+```bash
+./gradlew installDebug
+```
+
+This compiles a debug build and installs it on every phone currently visible to `adb` (check with `adb devices`). Then unlock the phone and tap the app icon to launch it manually.
+
+### Generate a debug APK to share with other phones
+
+```bash
+./gradlew assembleDebug
+```
+
+The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Copy that file to the other phones (USB, cloud drive, etc.) and install it on each — for example with `adb install -r app-debug.apk` while a phone is plugged in, or by tapping the file in a file manager on the phone.
+
+### Useful extras
+
+- `adb devices` — list connected phones and their serials.
+- `adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk` — install on one specific phone when several are plugged in.
+- `./gradlew clean` — wipe build artifacts if a build gets into a weird state.
+
+---
+
 ## Post-processing (off-device; not in the app)
 
 The application does **not** include post-processing. The steps below describe a typical **offline** workflow to interpret how synchronization relates the captures across phones.
@@ -106,3 +134,18 @@ Extract each video into **images** and **name** (or otherwise tag) each image wi
 ### 13. Match “same-time” frames across cameras
 
 Group frames whose timestamps differ by less than a chosen **threshold** and treat those frames as **approximately simultaneous** across all phones. That yields multi-view samples suitable for downstream analysis or stitching.
+
+### Example: external preprocessing scripts (11 phones)
+
+One practical pipeline (outside this repo) is:
+
+1. Run `sync.py` to match timestamps across devices and write `matched.csv`.
+   - Script: `C:\Users\yuboh\GitHub\Motion-Capture\scripts\preprocess\sync.py`
+   - Output (example): `C:\Users\yuboh\GitHub\Motion-Capture\output\exp\sync0403_16ms\matched.csv`
+   - Configuration: **timestamp match threshold = 16 ms** (set inside `sync.py`)
+2. Move or separate unmatched images:
+   - Script: `C:\Users\yuboh\GitHub\Motion-Capture\scripts\preprocess\move_unmatched.py`
+3. Create a quick stitched multi-view visualization for sanity checking:
+   - Script: `C:\Users\yuboh\GitHub\Motion-Capture\scripts\preprocess\synctest\stitch.py`
+
+In the 11-phone setup, this visualization sometimes shows pairwise synchronization errors around **20–50 ms**, which is higher than expected. We need to find a better synchronization method.
