@@ -8,6 +8,17 @@ The work behind this project follows one chain:
 
 
 
+## Documentation
+
+In addition to this README, the repository ships with longer-form docs under [`docs/`](docs/):
+
+- **[docs/REPORT.md](docs/REPORT.md)** — Detailed technical report: architecture, synchronization pipeline (SNTP + phase alignment), per-class responsibilities, and the analysis behind the current sync-accuracy results.
+- **[docs/ptp_feasibility.md](docs/ptp_feasibility.md)** — Feasibility memo on whether moving from SNTP to a PTP-style protocol would help on 11 Pixel 7 phones over Wi-Fi, including the cheaper non-PTP improvements that are worth doing first.
+
+New contributors should start with this README, then read **REPORT.md** before changing anything in `softwaresync/` or the camera/encoder pipeline.
+
+---
+
 ## Purpose of this document
 
 This README is written for **new team members** learning the field workflow and for **AI agents** that need a precise, ordered checklist of human-operated steps when this app is used in practice.
