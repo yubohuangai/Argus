@@ -159,4 +159,4 @@ One practical pipeline (outside this repo) is:
 3. Create a quick stitched multi-view visualization for sanity checking:
    - Script: `C:\Users\yuboh\GitHub\Motion-Capture\scripts\preprocess\synctest\stitch.py`
 
-In the 11-phone setup with **11 Pixel 7** devices, the **maximum** observed inter-device timestamp difference stays **below 17 ms** for **9-minute** recordings.
+In the 11-phone setup with **11 Pixel 7** devices, the **maximum** directly-observed cross-phone synchronization error stays **below 17 ms** for **9-minute** recordings. This is an end-to-end measurement of the optical pipeline, not a software timestamp comparison — see [`docs/REPORT.md` §10. Synchronization Accuracy Validation](docs/REPORT.md#10-synchronization-accuracy-validation) for the full method.

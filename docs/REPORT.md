@@ -393,3 +393,44 @@ The `external/` submodule contains Python scripts (notably `sync.py`) that:
 4. Output `matched_full.csv` with pairwise timestamp differences for sync quality analysis
 
 Sync quality is assessed by examining pairwise timestamp diffs on matched frames, not the in-app Phase Error readout.
+
+---
+
+## 10. Synchronization Accuracy Validation
+
+End-to-end synchronization accuracy is measured **directly from the recorded video**, not from software timestamps alone. Pure timestamp comparison can hide real-world errors introduced by sensor exposure, ISP latency, frame-output time, and clock-domain conversion — none of which appear in metadata. The optical reference signal described below exposes every link in the capture pipeline.
+
+### 10.1 Method
+
+1. **Reference video.** Generate a 60 FPS video that displays digits 1–99 in a recurring loop, with each digit occupying exactly one frame.
+2. **Display.** Play the reference video on a 60 Hz monitor. Because the video frame rate matches the monitor refresh rate, **each digit is visible for exactly one monitor refresh period (≈ 16.67 ms)**. This gives a continuously-changing visual time reference with a known, fixed quantum.
+3. **Capture.** All N phones (N = 11 Pixel 7 devices in our setup) point at the monitor and record simultaneously, using the standard Argus / RecSync-Mod synchronized-recording workflow.
+4. **Analysis.** For any chosen wall-clock moment (or for each frame in a sweep), read the displayed digit from each phone's video. The **maximum digit difference across phones at that moment** is the synchronization error in units of monitor frames; multiply by 16.67 ms to get the time bound.
+
+### 10.2 Result
+
+Across **9-minute recordings** on **11 Pixel 7** devices:
+
+> No two phones ever differed by more than **1 digit** at the same wall-clock moment.
+
+The maximum directly-observed cross-phone synchronization drift is therefore bounded by **one monitor-frame period — under 17 ms end-to-end**.
+
+### 10.3 Why this is stronger than timestamp-only validation
+
+| Comparison | Timestamp-only | Optical-counter (this method) |
+|---|---|---|
+| Captures sensor exposure-window timing | ❌ | ✓ |
+| Captures ISP / camera-pipeline latency | ❌ | ✓ |
+| Captures frame-output / encoding lag | ❌ | ✓ |
+| Captures clock-domain conversion errors | partial | ✓ |
+| Independent of device-reported metadata | ❌ | ✓ |
+| Quantum / resolution | sensor-dependent | exactly one monitor-refresh period (≈ 16.67 ms at 60 Hz) |
+
+Software timestamps record what the OS thinks happened; the optical-counter method records what the sensor actually saw. The 17 ms bound from the optical-counter method is the *real* upper bound a downstream consumer of the videos can rely on.
+
+### 10.4 Practical notes
+
+- The 60 FPS / 60 Hz pairing is essential: if the video frame rate and monitor refresh rate differ, individual digits appear for variable durations and the per-frame quantum is no longer constant.
+- For smaller error bounds, use a higher-refresh monitor (e.g., 120 Hz or 240 Hz) with a matched-FPS reference video. Each digit is then visible for ≈ 8.33 ms or ≈ 4.17 ms, tightening the resolution accordingly.
+- Reading digits can be automated with simple OCR or template matching against the rendered digit set; for spot checks, visual inspection of frame thumbnails is sufficient.
+- This method also exposes systematic **phase offsets** between phones (e.g., if Phone 3 is consistently 1 digit ahead of the others), not just maximum drift.
